@@ -88,7 +88,7 @@ wheels = [
 ]
 
 [[package]]
-name = "habit-ledger-agent"
+name = "habit-tracker"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

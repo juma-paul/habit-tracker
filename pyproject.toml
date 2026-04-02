@@ -1,5 +1,5 @@
 [project]
-name = "HabitLedger"
+name = "habit-tracker"
 version = "0.1.0"
 description = "An agentic AI system that logs habits from natural language"
 readme = "README.md"
