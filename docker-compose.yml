@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: habit-tracker-user
+      POSTGRES_PASSWORD: habit-tracker-pass
+      POSTGRES_DB: habit-tracker-db
+
+    ports:
+      - "5434:5432"
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./app/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U habit-tracker-user"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  pgdata:
