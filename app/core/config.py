@@ -12,8 +12,6 @@ class Environment(str, Enum):
     production = "production"
     staging = "staging"
 
-environment: Environment = Field(alias="ENVIRONMENT")
-
 class Settings(BaseSettings):
     "Settings loaded from environment variables"
 

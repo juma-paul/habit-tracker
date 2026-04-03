@@ -1,5 +1,5 @@
 def main():
-    print("Hello from habit-ledger-agent!")
+    print("Hello from habit-tracker!")
 
 
 if __name__ == "__main__":
