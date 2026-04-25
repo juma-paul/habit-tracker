@@ -6,6 +6,23 @@ from app.db.connection import get_conn
 # USERS
 # ======================================================
 
+async def get_or_create_user(external_id: str, email: str, name: str = "") -> dict:
+    """Get existing user by AuthKit UUID or create on first login."""
+    async with get_conn() as conn:
+        cur = await conn.execute(
+            "SELECT * FROM users WHERE external_id = %s",
+            (external_id,)
+        )
+        user = await cur.fetchone()
+        if user:
+            return dict(user)
+        cur = await conn.execute(
+            "INSERT INTO users (external_id, email, name) VALUES (%s, %s, %s) RETURNING *",
+            (external_id, email, name)
+        )
+        return dict(await cur.fetchone())
+
+
 async def get_user_by_id(user_id: int) -> dict | None:
     """Get user by ID."""
     async with get_conn() as conn:
@@ -130,13 +147,13 @@ async def create_log(habit_id: int, user_id: int, value: float, notes: str | Non
     habit = await get_habit(habit_id, user_id)
 
     if not habit:
-        return await ValueError("Habit not found or access denied")
+        raise ValueError("Habit not found or access denied")
     
     async with get_conn() as conn:
         cur = await conn.execute(
             """
             INSERT INTO habit_logs (habit_id, value, notes)
-            VALUES (%S, %S, %S)
+            VALUES (%s, %s, %s)
             RETURNING *
             """,
             (habit_id, value, notes)
@@ -149,7 +166,7 @@ async def get_logs(habit_id: int, user_id: int, days: int = 7) -> list[dict]:
     habit = await get_habit(habit_id, user_id)
 
     if not habit:
-        return await ValueError("Habit not found or access denied")
+        raise ValueError("Habit not found or access denied")
     
     since = datetime.now() - timedelta(days=days)
 
@@ -170,7 +187,7 @@ async def update_log(log_id: int, user_id: int, **fields) -> dict | None:
     if not fields:
         return None
     
-    sets = ', '.join(f"l.{k} = % s" for k in fields)
+    sets = ', '.join(f"l.{k} = %s" for k in fields)
     values = list(fields.values()) + [log_id, user_id]
 
     async with get_conn() as conn:
@@ -205,7 +222,7 @@ async def get_progress(habit_id: int, user_id: int, days: int = 7) -> dict:
     """Get aggregated progress stats for a habit."""
     habit = await get_habit(habit_id, user_id)
     if not habit:
-        return await ValueError("Habit not found or access denied")
+        raise ValueError("Habit not found or access denied")
     
     since = datetime.now() - timedelta(days=days)
 
@@ -225,28 +242,28 @@ async def get_progress(habit_id: int, user_id: int, days: int = 7) -> dict:
         )
         stats = await cur.fetchone()
 
-        completion_rate = None
-        if habit['target']:
-            expected = (
-                days
-                if habit['frequency'] == 'daily'
-                else days // 7
-            )
+    completion_rate = None
+    if habit['target']:
+        expected = (
+            days
+            if habit['frequency'] == 'daily'
+            else days // 7
+        )
 
-            completion_rate = min(
-                100,
-                (stats['total_logs'] / max(1, expected)) * 100
-            )
+        completion_rate = min(
+            100,
+            (stats['total_logs'] / max(1, expected)) * 100
+        )
 
-        return {
-            "habit": habit,
-            "days": days,
-            "total_logs": stats['total_logs'],
-            "total_value": float(stats['total_value']),
-            "avg_value": float(stats['avg_value']),
-            "last_log": stats['last_log'],
-            "completion_rate": completion_rate,
-        }
+    return {
+        "habit": habit,
+        "days": days,
+        "total_logs": stats['total_logs'],
+        "total_value": float(stats['total_value']),
+        "avg_value": float(stats['avg_value']),
+        "last_log": stats['last_log'],
+        "completion_rate": completion_rate,
+    }
     
     
 # ======================================================
@@ -300,7 +317,7 @@ async def update_conversation(conversation_id: int, user_id: int, **fields) -> d
     if not fields:
         return await get_conversation(conversation_id, user_id)
     
-    fields["update_at"] = datetime.now()
+    fields["updated_at"] = datetime.now()
     sets = ', '.join(f"{k} = %s" for k in fields)
     values = list(fields.values()) + [conversation_id, user_id]
 
@@ -321,7 +338,7 @@ async def delete_conversation(conversation_id: int, user_id: int) -> int | None:
     async with get_conn() as conn:
         cur = await conn.execute(
             """
-            DELETE FROM converstaions
+            DELETE FROM conversations
             WHERE id = %s AND user_id = %s
             RETURNING *
             """,
@@ -344,7 +361,7 @@ async def add_message(conversation_id: int, role: str, content: str) -> dict:
         # Insert message
         cur = await conn.execute(
             """
-            INSERT INTO messages (converstaion_id, role, content)
+            INSERT INTO messages (conversation_id, role, content)
             VALUES (%s, %s, %s)
             RETURNING *
             """,
@@ -409,7 +426,7 @@ async def get_recent_messages(conversation_id: int, user_id: int, limit: int = 1
     
     async with get_conn() as conn:
         # Get last N messages. then reverse to chronological order
-        cur = conn.execute(
+        cur = await conn.execute(
             """
             SELECT * FROM messages
             WHERE conversation_id = %s

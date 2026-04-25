@@ -1,6 +1,7 @@
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
+    external_id UUID UNIQUE NOT NULL, -- From AuthKit
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(100) DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW()
@@ -48,7 +49,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- User settings table
 CREATE TABLE IF NOT EXISTS user_settings (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE UNIQUE,
     theme VARCHAR(20) DEFAULT 'system',
     voice_enabled BOOLEAN DEFAULT TRUE,
     notifications BOOLEAN DEFAULT TRUE,
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
 );
 
 -- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id);
 CREATE INDEX IF NOT EXISTS idx_habits_user ON habits(user_id);
 CREATE INDEX IF NOT EXISTS idx_habits_user_active ON habits(user_id) WHERE is_deleted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_logs_habit ON habit_logs(habit_id);
@@ -64,8 +66,3 @@ CREATE INDEX IF NOT EXISTS idx_logs_habit_date ON habit_logs(habit_id, logged_at
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
-
--- DEVELOPMENT: seed test user(id=1)
-INSERT INTO users (email, name)
-VALUES ('dev@example.com', 'Dev User')
-ON CONFLICT (email) DO NOTHING;
