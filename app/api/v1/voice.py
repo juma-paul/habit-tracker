@@ -1,5 +1,7 @@
 """Voice endpoints: speech-to-text and text-to-speech."""
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from fastapi.responses import Response
 from slowapi import Limiter
@@ -55,7 +57,7 @@ async def voice_chat(
     return VoiceResponse(
         transcript=transcript,
         agent_response=agent_response,
-        audio_url=f"/api/v1/voice/tts?text={agent_response.message[:200]}"
+        audio_url=f"/api/v1/voice/tts?text={quote(agent_response.message[:200])}"
     )
 
 
