@@ -68,7 +68,7 @@ def log_tool_call(func: Callable) -> Callable:
             # Check for errors in result
             if isinstance(result, dict) and "error" in result:
                 logger.warning(
-                    f"Tool {tool_name} returned error: {result["error"]}",
+                    f"Tool {tool_name} returned error: {result['error']}",
                     tool=tool_name,
                     elapsed_ms=round(elapsed_ms, 2)
                 )
@@ -89,6 +89,9 @@ def log_tool_call(func: Callable) -> Callable:
                 elapsed_ms=round(elapsed_ms, 2),
                 error=str(e),
             )
+            raise
+    
+    return wrapper
 
 
 def log_agent_run(

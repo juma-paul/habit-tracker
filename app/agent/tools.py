@@ -51,7 +51,7 @@ async def update_habit(
         user_id: int,
         habit_name: str,
         new_name: str | None = None,
-        target: str | None = None,
+        target: float | None = None,
         unit: str | None = None,
         frequency: str | None = None,
 ) -> dict:
@@ -81,7 +81,7 @@ async def delete_habit(user_id: int, habit_name: str) -> dict:
     """Delete a habit."""
     habit = await queries.find_habit_by_name(user_id, habit_name)
     if not habit:
-        return {"habit": habit, "message": f"No habit found matching '{habit_name}'"}
+        return {"error": f"No habit found matching '{habit_name}'"}
     
     deleted = await queries.delete_habit(habit["id"], user_id)
     return {"habit": deleted, "message": f"Deleted habit: {habit['name']}"}
@@ -105,7 +105,7 @@ async def update_log(
     
     log = await queries.update_log(log_id, user_id, **updates)
     if not log:
-        return {"error": "LOg not found or access denied"}
+        return {"error": "Log not found or access denied"}
 
     return {"log": log, "message": "Log updated"}
 
