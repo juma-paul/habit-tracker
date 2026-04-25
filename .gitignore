@@ -1,9 +1,19 @@
-# Environment
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
 .venv
 .env
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# Logs
+logs/
+*.log
+.claude
+
+# Test
+.pytest_cache
