@@ -1,7 +1,7 @@
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    external_id UUID UNIQUE NOT NULL, -- From AuthKit
+    external_id UUID UNIQUE NOT NULL, -- AuthKit userId (from JWT claim)
     email VARCHAR(255) UNIQUE NOT NULL,
     name VARCHAR(100) DEFAULT '',
     created_at TIMESTAMP DEFAULT NOW()
