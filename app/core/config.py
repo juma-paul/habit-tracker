@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     tts_model: str = "tts-1"
     tts_voice: str = "nova"
 
+    # Auth — shared JWT secret with AuthKit (HS256)
+    jwt_secret: str = Field(alias="JWT_SECRET")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")  
+
     # App
     environment: Environment = Field(alias="ENVIRONMENT")
 

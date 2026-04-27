@@ -12,6 +12,7 @@ dependencies = [
     "psycopg[binary,pool]>=3.3.3",
     "pydantic-ai>=1.77.0",
     "pydantic-settings>=2.13.1",
+    "pyjwt>=2.12.1",
     "python-multipart>=0.0.22",
     "slowapi>=0.1.9",
     "sse-starlette>=3.3.3",

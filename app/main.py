@@ -1,6 +1,5 @@
 """FastAPI application entry point."""
 
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,6 +9,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.connection import init_pool, close_pool
 from app.api.v1 import router as v1_router
@@ -30,15 +30,12 @@ async def lifespan(app: FastAPI):
     await close_pool()
     logger.info("Database pool closed")
 
-# Check if we're in dev mode
-is_dev = os.getenv("ENVIRONMENT", "development") == "development"
-
 app = FastAPI(
     title="Habit Tracking Agent",
     description="AI-powered habit tracking web app with text and voice.",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/docs" if is_dev else None,
+    docs_url="/docs" if get_settings().is_dev else None,
 )
 
 # Rate limiting
