@@ -51,6 +51,9 @@ def test_websocket_invalid_cookie(client):
 def test_websocket_ping_pong(auth_client):
     """WebSocket connection with valid cookie accepts ping and returns pong."""
     with auth_client.websocket_connect("/api/v1/ws/voice") as ws:
+        # Server sends conversation_id immediately on connect
+        first = ws.receive_json()
+        assert first["type"] == "conversation_id"
         ws.send_json({"type": "ping"})
         response = ws.receive_json()
         assert response["type"] == "pong"
