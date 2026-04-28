@@ -22,9 +22,21 @@ class Settings(BaseSettings):
     db_pool_min: int = 2
     db_pool_max: int = 10
 
-    # OpenAI
+    # AI provider — set AI_PROVIDER=openai or AI_PROVIDER=anthropic
+    ai_provider: str = Field(default="openai", alias="AI_PROVIDER")
+
+    # Control model — set CONTROL_MODEL=freeform or CONTROL_MODEL=graph
+    control_model: str = Field(default="freeform", alias="CONTROL_MODEL")
+
+    # OpenAI — gpt-4.1 | gpt-4.1-mini | gpt-4.1-nano
     openai_api_key: SecretStr = Field(alias="OPENAI_API_KEY")
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = Field(default="gpt-4.1-mini", alias="OPENAI_MODEL")
+
+    # Anthropic — claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5-20251001
+    anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(default="claude-sonnet-4-6", alias="ANTHROPIC_MODEL")
+
+    # Voice (always OpenAI)
     whisper_model: str = "whisper-1"
     tts_model: str = "tts-1"
     tts_voice: str = "nova"
