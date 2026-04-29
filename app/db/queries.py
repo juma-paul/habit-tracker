@@ -6,6 +6,19 @@ from app.db.connection import get_conn
 # USERS
 # ======================================================
 
+async def get_user_by_id(user_id: int) -> dict | None:
+    """Get user by ID."""
+    async with get_conn() as conn:
+        cur = await conn.execute(
+            """SELECT id, email, COALESCE(name, '') as name, created_at 
+               FROM users 
+               WHERE id = %s""",
+            (user_id,)
+        )
+
+        return await cur.fetchone()
+    
+
 async def get_or_create_user(external_id: str, email: str, name: str = "") -> dict:
     """Get existing user by AuthKit UUID or create on first login."""
     async with get_conn() as conn:
@@ -21,19 +34,6 @@ async def get_or_create_user(external_id: str, email: str, name: str = "") -> di
             (external_id, email, name)
         )
         return dict(await cur.fetchone())
-
-
-async def get_user_by_id(user_id: int) -> dict | None:
-    """Get user by ID."""
-    async with get_conn() as conn:
-        cur = await conn.execute(
-            """SELECT id, email, COALESCE(name, '') as name, created_at 
-               FROM users 
-               WHERE id = %s""",
-            (user_id,)
-        )
-
-        return await cur.fetchone()
     
 
 # ======================================================

@@ -6,18 +6,17 @@ from typing import AsyncIterator
 
 from loguru import logger
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.usage import UsageLimits
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     UserPromptPart,
     TextPart,
-    PartDeltaEvent,
-    TextPartDelta,
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
 )
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from app.core.config import get_settings
 from app.core.logging import log_tool_call, log_agent_run
@@ -33,11 +32,19 @@ def get_agent() -> Agent[int, AgentResponse]:
     """Get or create the agent (lazy initialization)."""
     settings = get_settings()
 
-    # Create OpenAI model with provider
-    model = OpenAIChatModel(
-        settings.openai_model,
-        provider=OpenAIProvider(api_key=settings.openai_api_key.get_secret_value()),
-    )
+    # Build model based on configured provider
+    if settings.ai_provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic")
+        model = AnthropicModel(
+            settings.anthropic_model,
+            provider=AnthropicProvider(api_key=settings.anthropic_api_key.get_secret_value()),
+        )
+    else:
+        model = OpenAIChatModel(
+            settings.openai_model,
+            provider=OpenAIProvider(api_key=settings.openai_api_key.get_secret_value()),
+        )
 
     agent = Agent(
         model=model,
@@ -174,7 +181,8 @@ def get_agent() -> Agent[int, AgentResponse]:
         """
         return await log_tool_call(tools.delete_log)(ctx.deps, log_id)
     
-    logger.info(f"Agent initialized with model: {settings.openai_model}")
+    model_name = settings.anthropic_model if settings.ai_provider == "anthropic" else settings.openai_model
+    logger.info(f"Agent initialized with model: {model_name}")
     return agent
 
 
@@ -194,7 +202,7 @@ async def run_agent(
 
     logger.debug(f"Running agent for user {user_id}: {message[:50]}...")
 
-    result = await agent.run(message, deps=user_id)
+    result = await agent.run(message, deps=user_id, usage_limits=UsageLimits(request_limit=15, tool_calls_limit=5))
     elapsed_ms = (perf_counter() - start) * 1000
 
     # Extract usage info if available
@@ -250,33 +258,18 @@ async def run_agent_stream(
         await queries.add_message(conversation_id, "user", message)
     
     full_response: list[str] = []
-    tool_call_count = 0
 
     async with agent.run_stream(
         message,
         deps=user_id,
         output_type=str,
         message_history=history,
+        usage_limits=UsageLimits(request_limit=15, tool_calls_limit=5),
     ) as result:
-        async for event in result.stream_events():
-            if isinstance(event, FunctionToolCallEvent):
-                tool_call_count += 1
-                logger.info(
-                    f"Stream tool call: {event.part.tool_name}",
-                    tool=event.part.tool_name,
-                    args=event.part.args_as_dict(),
-                )
-            elif isinstance(event, FunctionToolResultEvent):
-                logger.info(
-                    f"Stream tool result: {event.result.tool_name}",
-                    tool=event.result.tool_name,
-                    content=str(event.result.content)[:200],
-                )
-            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                chunk = event.delta.content_delta
-                if chunk:
-                    full_response.append(chunk)
-                    yield chunk
+        async for chunk in result.stream_text(delta=True):
+            if chunk:
+                full_response.append(chunk)
+                yield chunk
 
     # After stream complete - save and log
     elapsed_ms = (perf_counter() - start) * 1000
@@ -290,6 +283,5 @@ async def run_agent_stream(
         message=message,
         response=response_text,
         elapsed_ms=elapsed_ms,
-        tool_calls=tool_call_count
     )
     

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 @router.get("", response_model=list[ConversationResponse])
 async def list_conversations(user_id: CurrentUser) -> list[ConversationResponse]:
     """Get all conversations for the current user."""
-    conversations = await queries.get_conversation(user_id)
+    conversations = await queries.get_conversations(user_id)
     return [ConversationResponse(**c) for c in conversations]
 
 
