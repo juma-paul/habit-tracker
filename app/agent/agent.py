@@ -12,10 +12,6 @@ from pydantic_ai.messages import (
     ModelResponse,
     UserPromptPart,
     TextPart,
-    PartDeltaEvent,
-    TextPartDelta,
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
 )
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -262,7 +258,6 @@ async def run_agent_stream(
         await queries.add_message(conversation_id, "user", message)
     
     full_response: list[str] = []
-    tool_call_count = 0
 
     async with agent.run_stream(
         message,
@@ -271,25 +266,10 @@ async def run_agent_stream(
         message_history=history,
         usage_limits=UsageLimits(request_limit=15, tool_calls_limit=5),
     ) as result:
-        async for event in result.stream_events():
-            if isinstance(event, FunctionToolCallEvent):
-                tool_call_count += 1
-                logger.info(
-                    f"Stream tool call: {event.part.tool_name}",
-                    tool=event.part.tool_name,
-                    args=event.part.args_as_dict(),
-                )
-            elif isinstance(event, FunctionToolResultEvent):
-                logger.info(
-                    f"Stream tool result: {event.result.tool_name}",
-                    tool=event.result.tool_name,
-                    content=str(event.result.content)[:200],
-                )
-            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                chunk = event.delta.content_delta
-                if chunk:
-                    full_response.append(chunk)
-                    yield chunk
+        async for chunk in result.stream_text(delta=True):
+            if chunk:
+                full_response.append(chunk)
+                yield chunk
 
     # After stream complete - save and log
     elapsed_ms = (perf_counter() - start) * 1000
@@ -303,6 +283,5 @@ async def run_agent_stream(
         message=message,
         response=response_text,
         elapsed_ms=elapsed_ms,
-        tool_calls=tool_call_count
     )
     

@@ -1,6 +1,6 @@
 """Chat endpoints for AI interaction with streaming support."""
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
@@ -9,6 +9,7 @@ from app.agent.agent import run_agent, run_agent_stream
 from app.agent.help import HELP_CONTENT, HELP_DATA
 from app.models.schemas import ChatRequest, AgentResponse, AgentStatus
 from app.api.deps import CurrentUser
+from app.db import queries
 
 
 router = APIRouter(tags=["chat"])
@@ -42,7 +43,12 @@ async def chat(request: Request, req: ChatRequest, user_id: CurrentUser) -> Agen
     # Handle help command
     if _is_help_command(req.message):
         return _get_help_response()
-    
+
+    if req.conversation_id is not None:
+        conversation = await queries.get_conversation(req.conversation_id, user_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
     return await run_agent(req.message, user_id, req.conversation_id)
 
 
@@ -94,7 +100,12 @@ async def chat_stream(request: Request, req: ChatRequest, user_id: CurrentUser):
             yield {"event": "message", "data": HELP_CONTENT}
             yield {"event": "done", "data": "[DONE]"}
         return EventSourceResponse(help_generator())
-    
+
+    if req.conversation_id is not None:
+        conversation = await queries.get_conversation(req.conversation_id, user_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
     async def event_generator():
         """Generate SSE events from agent stream."""
         try:
