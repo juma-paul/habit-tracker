@@ -9,6 +9,7 @@ from loguru import logger
 
 from app.core.config import settings
 
+
 def setup_logging() -> None:
     """Configure loguru for the application."""
 
@@ -28,7 +29,7 @@ def setup_logging() -> None:
         sys.stderr,
         format=log_format,
         level="DEBUG" if settings.environment == "development" else "INFO",
-        colorize=True
+        colorize=True,
     )
 
     # Add file handler for production
@@ -41,9 +42,11 @@ def setup_logging() -> None:
             level="INFO",
         )
 
+
 # Cost estimates per 1M tokens (GPT-4o)
 COST_PER_1M_INPUT = 2.50
 COST_PER_1M_OUTPUT = 10.00
+
 
 def calculate_cost(input_tokens: int, output_tokens: int) -> float:
     """Calculate estimated cost in USD."""
@@ -52,8 +55,10 @@ def calculate_cost(input_tokens: int, output_tokens: int) -> float:
 
     return round(input_cost + output_cost, 6)
 
+
 def log_tool_call(func: Callable) -> Callable:
     """Decorator to log tool calls with timing."""
+
     @wraps(func)
     async def wrapper(*args, **kwargs) -> Any:
         tool_name = func.__name__
@@ -70,7 +75,7 @@ def log_tool_call(func: Callable) -> Callable:
                 logger.warning(
                     f"Tool {tool_name} returned error: {result['error']}",
                     tool=tool_name,
-                    elapsed_ms=round(elapsed_ms, 2)
+                    elapsed_ms=round(elapsed_ms, 2),
                 )
             else:
                 logger.info(
@@ -80,7 +85,7 @@ def log_tool_call(func: Callable) -> Callable:
                 )
 
             return result
-        
+
         except Exception as e:
             elapsed_ms = (perf_counter() - start) * 1000
             logger.error(
@@ -90,24 +95,24 @@ def log_tool_call(func: Callable) -> Callable:
                 error=str(e),
             )
             raise
-    
+
     return wrapper
 
 
 def log_agent_run(
-        user_id: int,
-        message: str,
-        response: str,
-        elapsed_ms: float,
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        tool_calls: int = 0
-        ) -> None:
+    user_id: int,
+    message: str,
+    response: str,
+    elapsed_ms: float,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    tool_calls: int = 0,
+) -> None:
     """Log agent run with metrics."""
     cost = calculate_cost(input_tokens, output_tokens)
 
     logger.info(
-        f"Agent run completed",
+        "Agent run completed",
         user_id=user_id,
         message_preview=message[:50] + "..." if len(message) > 50 else message,
         response_preview=response[:50] + "..." if len(response) > 50 else response,
@@ -118,9 +123,9 @@ def log_agent_run(
         cost_usd=cost,
     )
 
-    # Warn if latency exceeds target
-    if elapsed_ms > 200:
+    # LLM calls typically take 1–5s; warn above 10s (likely a timeout or hung request).
+    if elapsed_ms > 10_000:
         logger.warning(
-            f"High latency: {elapsed_ms:.2f}ms (target: <=200ms)",
-            elapsed_ms=round(elapsed_ms, 2)
+            f"High latency: {elapsed_ms:.2f}ms (target: <=10000ms)",
+            elapsed_ms=round(elapsed_ms, 2),
         )

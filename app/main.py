@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     await close_pool()
     logger.info("Database pool closed")
 
+
 app = FastAPI(
     title="Habit Tracking Agent",
     description="AI-powered habit tracking web app with text and voice.",

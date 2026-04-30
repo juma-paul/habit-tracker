@@ -51,8 +51,6 @@ async def text_to_speech(text: str) -> bytes:
     """Convert text to speech using OpenAI TTS."""
     settings = get_settings()
     response = _get_client().audio.speech.create(
-        model=settings.tts_model,
-        voice=settings.tts_voice,
-        input=text
+        model=settings.tts_model, voice=settings.tts_voice, input=text
     )
     return response.content

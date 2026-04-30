@@ -2,12 +2,13 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 
 
 # ===============================
 # ENUMS
 # ===============================
+
 
 class Frequency(str, Enum):
     daily = "daily"
@@ -37,6 +38,7 @@ class AgentStatus(str, Enum):
 # AUTH
 # ===============================
 
+
 class UserResponse(BaseModel):
     id: int
     email: str
@@ -46,6 +48,7 @@ class UserResponse(BaseModel):
 # ===============================
 # HABITS
 # ===============================
+
 
 class HabitBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -75,6 +78,7 @@ class HabitResponse(HabitBase):
 # LOGS
 # ===============================
 
+
 class LogBase(BaseModel):
     value: float = Field(ge=0)
     notes: str | None = Field(default=None, max_length=500)
@@ -99,9 +103,14 @@ class HabitLogResponse(LogBase):
 # CHAT / AGENT
 # ===============================
 
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
     conversation_id: int | None = None
+    awaiting: str | None = None
+    # Echo the `data` dict from the previous response back here so the server
+    # can restore stateful fields (habit_name, log_id, etc.) between requests.
+    context: dict[str, Any] | None = None
 
 
 class AgentResponse(BaseModel):
@@ -116,6 +125,7 @@ class AgentResponse(BaseModel):
 # VOICE
 # ===============================
 
+
 class VoiceResponse(BaseModel):
     """Response for voice endpoints."""
 
@@ -127,6 +137,7 @@ class VoiceResponse(BaseModel):
 # ===============================
 # CONVERSATIONS
 # ===============================
+
 
 class ConversationBase(BaseModel):
     title: str = Field(default="New Chat", max_length=255)
@@ -163,6 +174,7 @@ class ConversationWithMessages(BaseModel):
 # ===============================
 # USER SETTINGS
 # ===============================
+
 
 class SettingsUpdate(BaseModel):
     theme: Theme | None = None

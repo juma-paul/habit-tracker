@@ -16,15 +16,17 @@ from app.db import queries
 
 router = APIRouter(tags=["websocket"])
 
+
 async def get_tts_stream(client: AsyncOpenAI, text: str, settings):
     """Generate TTS audio and yield chunks."""
     response = await client.audio.speech.create(
         model=settings.tts_model,
         voice=settings.tts_voice,
         input=text,
-        response_format="mp3"
+        response_format="mp3",
     )
     return response.content
+
 
 @router.websocket("/ws/voice")
 async def voice_websocket(websocket: WebSocket):
@@ -89,16 +91,18 @@ async def voice_websocket(websocket: WebSocket):
     if not token:
         await websocket.close(code=1008, reason="Not authenticated")
         return
-    
+
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
         external_id = payload["userId"]
         user = await queries.get_or_create_user(external_id, payload.get("email", ""))
         user_id = user["id"]
     except (ExpiredSignatureError, InvalidTokenError):
         await websocket.close(code=1008, reason="Invalid token")
         return
-    
+
     await websocket.accept()
 
     settings = get_settings()
@@ -148,83 +152,89 @@ async def voice_websocket(websocket: WebSocket):
 
                     if msg_type == "process":
                         if not audio_buffer:
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": "No audio data to process"
-                            })
+                            await websocket.send_json(
+                                {"type": "error", "message": "No audio data to process"}
+                            )
                             continue
 
                         try:
                             # Transcribe
-                            transcript = await transcribe(bytes(audio_buffer), "audio/webm")
+                            transcript = await transcribe(
+                                bytes(audio_buffer), "audio/webm"
+                            )
                             audio_buffer.clear()
 
                             if not transcript.strip():
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": "Could not transcribe audio"
-                                })
+                                await websocket.send_json(
+                                    {
+                                        "type": "error",
+                                        "message": "Could not transcribe audio",
+                                    }
+                                )
                                 continue
 
                             # Send transcript
-                            await websocket.send_json({
-                                "type": "transcript",
-                                "text": transcript
-                            })
-                            
+                            await websocket.send_json(
+                                {"type": "transcript", "text": transcript}
+                            )
+
                             # Save user message to a conversation
-                            await queries.add_message(conversation_id, "user", transcript)
+                            await queries.add_message(
+                                conversation_id, "user", transcript
+                            )
 
                             # Stream agent response
                             await websocket.send_json({"type": "response_start"})
 
                             full_response = ""
-                            async for chunk in run_agent_stream(transcript, user_id, conversation_id):
+                            async for chunk in run_agent_stream(
+                                transcript, user_id, conversation_id
+                            ):
                                 full_response += chunk
-                                await websocket.send_json({
-                                    "type": "response_chunk",
-                                    "text": chunk
-                                })
+                                await websocket.send_json(
+                                    {"type": "response_chunk", "text": chunk}
+                                )
 
-                            await websocket.send_json({
-                                "type": "response_end",
-                                "full_text": full_response
-                            })
+                            await websocket.send_json(
+                                {"type": "response_end", "full_text": full_response}
+                            )
 
                             # Save assistant response to conversation
-                            await queries.add_message(conversation_id, "assistant", full_response)
+                            await queries.add_message(
+                                conversation_id, "assistant", full_response
+                            )
 
                             # Generate and send TTS audio
                             if full_response:
                                 await websocket.send_json({"type": "audio_start"})
 
                                 # Get TTS audio
-                                audio_data = await get_tts_stream(client, full_response, settings)
+                                audio_data = await get_tts_stream(
+                                    client, full_response, settings
+                                )
 
                                 # Send in chunks
                                 chunk_size = 16 * 1024
                                 for i in range(0, len(audio_data), chunk_size):
-                                    chunk = audio_data[i:i + chunk_size]
-                                    await websocket.send_json({
-                                        "type": "audio_chunk",
-                                        "data": base64.b64decode(chunk).decode()
-                                    })
+                                    chunk = audio_data[i : i + chunk_size]
+                                    await websocket.send_json(
+                                        {
+                                            "type": "audio_chunk",
+                                            "data": base64.b64decode(chunk).decode(),
+                                        }
+                                    )
 
                                 await websocket.send_json({"type": "audio_end"})
 
                         except Exception as e:
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": str(e)
-                            })
+                            await websocket.send_json(
+                                {"type": "error", "message": str(e)}
+                            )
 
         except WebSocketDisconnect:
             pass
         except Exception as e:
             try:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": str(e)
-                })
-            except:
+                await websocket.send_json({"type": "error", "message": str(e)})
+            except Exception:
                 pass

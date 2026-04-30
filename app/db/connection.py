@@ -9,6 +9,7 @@ from app.core.config import settings
 
 _pool: AsyncConnectionPool | None = None
 
+
 # Initialize connection
 async def init_pool() -> None:
     """Initialize the connection pool. Call once at startup."""
@@ -22,6 +23,7 @@ async def init_pool() -> None:
         kwargs={"row_factory": dict_row},
     )
     await _pool.open()
+
 
 # Close connection pool
 async def close_pool() -> None:

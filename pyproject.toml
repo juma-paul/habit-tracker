@@ -23,7 +23,34 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy>=1.20.2",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.8",
 ]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+
+# psycopg sets dict_row at pool-init time; stubs only know tuple rows.
+# pydantic-settings resolves fields from env; stubs see missing constructor args.
+# These are library stub gaps, not bugs in our code.
+[[tool.mypy.overrides]]
+module = "app.db.queries"
+disable_error_code = ["return-value", "arg-type", "index", "call-overload"]
+
+[[tool.mypy.overrides]]
+module = "app.core.config"
+disable_error_code = ["call-arg"]
+
+# pydantic-ai stubs type output_type as str; pydantic-graph types BaseNode.run
+# as returning End[Never]. Both are library stub gaps, not bugs in our code.
+[[tool.mypy.overrides]]
+module = "app.agent.graph_agent"
+disable_error_code = ["override", "arg-type"]
+
+# slowapi's exception-handler signature doesn't match FastAPI's expected type.
+[[tool.mypy.overrides]]
+module = "app.main"
+disable_error_code = ["arg-type"]

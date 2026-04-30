@@ -9,6 +9,7 @@ from app.api.deps import CurrentUser
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
+
 @router.get("", response_model=UserSettingsResponse)
 async def get_settings(user_id: CurrentUser) -> UserSettingsResponse:
     """Get current user's settings."""
@@ -17,7 +18,9 @@ async def get_settings(user_id: CurrentUser) -> UserSettingsResponse:
 
 
 @router.patch("", response_model=UserSettingsResponse)
-async def update_settings(req: SettingsUpdate, user_id: CurrentUser) -> UserSettingsResponse:
+async def update_settings(
+    req: SettingsUpdate, user_id: CurrentUser
+) -> UserSettingsResponse:
     """Update user settings."""
     updates = req.model_dump(exclude_none=True)
     settings = await queries.update_user_settings(user_id, **updates)

@@ -86,68 +86,66 @@ HELP_DATA = {
             "id": "create",
             "action": "Create Habit",
             "how": "create a [name] habit",
-            "example": "create a running habit for 5 km daily"
+            "example": "create a running habit for 5 km daily",
         },
         {
             "id": "list",
             "action": "List Habits",
             "how": "show my habits",
-            "example": "what habits do I have?"
+            "example": "what habits do I have?",
         },
         {
             "id": "log",
             "action": "Log Activity",
             "how": "I did [activity]",
-            "example": "I ran 3 km today"
+            "example": "I ran 3 km today",
         },
         {
             "id": "progress",
             "action": "View Progress",
             "how": "how am I doing with [habit]?",
-            "example": "show my running progress"
+            "example": "show my running progress",
         },
         {
             "id": "update",
             "action": "Update Habit",
             "how": "change [habit] to [new value]",
-            "example": "update my running goal to 10 km"
+            "example": "update my running goal to 10 km",
         },
         {
             "id": "delete",
             "action": "Delete Habit",
             "how": "delete [habit]",
-            "example": "remove my running habit"
+            "example": "remove my running habit",
         },
         {
             "id": "help",
             "action": "Get Help",
             "how": "/help",
-            "example": "type /help anytime"
-        }
+            "example": "type /help anytime",
+        },
     ],
-
     "tips": [
         "Be Natural: Say 'I walked 8,000 steps' instead of 'log 8000 for walking'",
         "Use Voice: Tap the microphone to speak your updates",
         "Check Progress: Ask 'how am I doing?' for an overview",
         "Set Targets: Include goals like '5 km daily' when creating habits",
     ],
-
     "frequencies": [
         {
             "type": "Daily",
             "best_for": "Regular activities",
-            "examples": "Exercise, meditation, reading"
+            "examples": "Exercise, meditation, reading",
         },
         {
             "type": "Weekly",
             "best_for": "Less frequent goals",
-            "examples": "Deep cleaning, meal prep"
+            "examples": "Deep cleaning, meal prep",
         },
         {
             "type": "Monthly",
             "best_for": "Long-term tracking",
-            "examples": "Budget reviews, goal check-ins"
-        }
-    ]
+            "examples": "Budget reviews, goal check-ins",
+        },
+    ],
 }

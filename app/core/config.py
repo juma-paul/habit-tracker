@@ -6,18 +6,18 @@ from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-
 class Environment(str, Enum):
     development = "development"
     production = "production"
     staging = "staging"
+
 
 class Settings(BaseSettings):
     "Settings loaded from environment variables"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Database 
+    # Database
     database_url: SecretStr = Field(alias="DATABASE_URL")
     db_pool_min: int = 2
     db_pool_max: int = 10
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # Auth — shared JWT secret with AuthKit (HS256)
     jwt_secret: str = Field(alias="JWT_SECRET")
-    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")  
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
 
     # App
     environment: Environment = Field(alias="ENVIRONMENT")
@@ -53,11 +53,13 @@ class Settings(BaseSettings):
 
     @property
     def is_dev(self) -> bool:
-        return self.environment == 'development'
-    
+        return self.environment == "development"
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
 
 # Convenience alias
 settings = get_settings()

@@ -24,7 +24,7 @@ async def get_current_user_id(request: Request) -> int:
     token = request.cookies.get("accessToken")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
+
     settings = get_settings()
     try:
         payload = jwt.decode(
@@ -43,6 +43,7 @@ async def get_current_user_id(request: Request) -> int:
     user = await queries.get_or_create_user(external_id, email)
 
     return user["id"]
+
 
 # Type alias for cleaner endpoint signatures
 CurrentUser = Annotated[int, Depends(get_current_user_id)]

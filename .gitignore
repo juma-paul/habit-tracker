@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+.mypy_cache
+.ruff_cache
 
 # Virtual environments
 .venv
@@ -17,3 +19,6 @@ logs/
 
 # Test
 .pytest_cache
+
+# Files
+benchmark.py

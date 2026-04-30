@@ -27,13 +27,15 @@ def _get_help_response() -> AgentResponse:
     return AgentResponse(
         status=AgentStatus.success,
         message=HELP_CONTENT,
-        data={"type": "help", "help": HELP_DATA}
+        data={"type": "help", "help": HELP_DATA},
     )
 
 
 @router.post("/chat", response_model=AgentResponse)
 @limiter.limit("30/minute")
-async def chat(request: Request, req: ChatRequest, user_id: CurrentUser) -> AgentResponse:
+async def chat(
+    request: Request, req: ChatRequest, user_id: CurrentUser
+) -> AgentResponse:
     """
     Send a message to the AI agent (non-streaming).
 
@@ -49,7 +51,7 @@ async def chat(request: Request, req: ChatRequest, user_id: CurrentUser) -> Agen
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-    return await run_agent(req.message, user_id, req.conversation_id)
+    return await run_agent(req.message, user_id, req.conversation_id, req.awaiting, req.context)
 
 
 @router.post("/chat/stream")
@@ -72,7 +74,7 @@ async def chat_stream(request: Request, req: ChatRequest, user_id: CurrentUser):
         console.log(data.text); // Append to UI
     };
     ```
-    or with fetch: 
+    or with fetch:
     ```javascript
     const response = await fetch('/api/v1/chat/stream', {
         method: 'POST',
@@ -96,9 +98,11 @@ async def chat_stream(request: Request, req: ChatRequest, user_id: CurrentUser):
     # Handle help command - return immediately without streaming
     # Help is NOT saved to conversation - it's static content
     if _is_help_command(req.message):
+
         async def help_generator():
             yield {"event": "message", "data": HELP_CONTENT}
             yield {"event": "done", "data": "[DONE]"}
+
         return EventSourceResponse(help_generator())
 
     if req.conversation_id is not None:
@@ -109,20 +113,12 @@ async def chat_stream(request: Request, req: ChatRequest, user_id: CurrentUser):
     async def event_generator():
         """Generate SSE events from agent stream."""
         try:
-            async for chunk in run_agent_stream(req.message, user_id, req.conversation_id):
-                yield {
-                    "event": "message",
-                    "data": chunk
-                }
-                yield {
-                    "event": "done",
-                    "data": "[DONE]"
-                }
+            async for chunk in run_agent_stream(
+                req.message, user_id, req.conversation_id, req.awaiting, req.context
+            ):
+                yield {"event": "message", "data": chunk}
+            yield {"event": "done", "data": "[DONE]"}
         except Exception as e:
-            yield {
-                "event": "error",
-                "data": str(e)
-            }
+            yield {"event": "error", "data": str(e)}
 
     return EventSourceResponse(event_generator())
-    

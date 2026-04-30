@@ -26,19 +26,20 @@ from app.agent import tools
 from app.db import queries
 
 
-
 @lru_cache
 def get_agent() -> Agent[int, AgentResponse]:
     """Get or create the agent (lazy initialization)."""
     settings = get_settings()
 
-    # Build model based on configured provider
+    model: AnthropicModel | OpenAIChatModel
     if settings.ai_provider == "anthropic":
         if not settings.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required when AI_PROVIDER=anthropic")
         model = AnthropicModel(
             settings.anthropic_model,
-            provider=AnthropicProvider(api_key=settings.anthropic_api_key.get_secret_value()),
+            provider=AnthropicProvider(
+                api_key=settings.anthropic_api_key.get_secret_value()
+            ),
         )
     else:
         model = OpenAIChatModel(
@@ -50,73 +51,60 @@ def get_agent() -> Agent[int, AgentResponse]:
         model=model,
         system_prompt=SYSTEM_PROMPT,
         deps_type=int,
-        output_type=AgentResponse
+        output_type=AgentResponse,
     )
 
-    # Register tools with logging decorators
     @agent.tool
     async def create_habit(
         ctx: RunContext[int],
         name: str,
         target: float | None = None,
         unit: str | None = None,
-        frequency: str = "daily"
+        frequency: str = "daily",
     ) -> dict:
         """Create a new habit to track.
-        
+
         Args:
-            ctx: Agent context with user_id
-            name: Name of the habit (e.g., "running", "reading")
-            target: Optional target value (e.g., 5 for 5km)
-            unit: Optional unit of measurement (e.g., "km", "minutes")
-            frequency: How often to track - "daily", "weekly", or "monthly"
+            name: Name of the habit (e.g., "running", "reading").
+            target: Optional target value (e.g., 5 for 5 km).
+            unit: Optional unit of measurement (e.g., "km", "minutes").
+            frequency: How often to track — "daily", "weekly", or "monthly".
         """
-        return await log_tool_call(tools.create_habit)(ctx.deps, name, target, unit, frequency)
-    
+        return await log_tool_call(tools.create_habit)(
+            ctx.deps, name, target, unit, frequency
+        )
 
     @agent.tool
     async def list_habits(ctx: RunContext[int]) -> dict:
-        """List all active habits for the user.
-        
-        Args:
-            ctx: Agent context with user_id
-        """
+        """List all active habits for the user."""
         return await log_tool_call(tools.list_habits)(ctx.deps)
-    
 
     @agent.tool
     async def log_activity(
-        ctx: RunContext[int],
-        habit_name: str,
-        value: float,
-        notes: str | None = None
+        ctx: RunContext[int], habit_name: str, value: float, notes: str | None = None
     ) -> dict:
         """Log activity for a habit.
-        
+
         Args:
-            ctx: Agent context with user_id
-            habit_name: Name of the habit to log for (partial match supported)
-            value: The value to log (e.g., 3 for 3km run)
-            notes: Optional notes about this activity
+            habit_name: Name of the habit to log for (partial match supported).
+            value: The value to log (e.g., 3 for a 3 km run).
+            notes: Optional notes about this activity.
         """
-        return await log_tool_call(tools.log_activity)(ctx.deps, habit_name, value, notes)
-    
-    
+        return await log_tool_call(tools.log_activity)(
+            ctx.deps, habit_name, value, notes
+        )
+
     @agent.tool
     async def get_progress(
-        ctx: RunContext[int],
-        habit_name: str,
-        days: int = 7
+        ctx: RunContext[int], habit_name: str, days: int = 7
     ) -> dict:
         """Get progress stats for a habit over a time period.
-        
+
         Args:
-            ctx: Agent context with user_id
-            habit_name: name of the habit to check (partial match supported)
-            days: Number of days to look back (default: 7)
+            habit_name: Name of the habit to check (partial match supported).
+            days: Number of days to look back (default: 7).
         """
         return await log_tool_call(tools.get_progress)(ctx.deps, habit_name, days)
-    
 
     @agent.tool
     async def update_habit(
@@ -128,72 +116,65 @@ def get_agent() -> Agent[int, AgentResponse]:
         frequency: str | None = None,
     ) -> dict:
         """Update a habit's settings.
-        
+
         Args:
-            ctx: Agent context with user_id
-            habit_name: Current name of the habit to update
-            new_name: New name for the habit(optional)
-            target: New target vakue (optional)
-            unit: New unit of measurement (optional)
-            frequency: New frequency - "daily", "weekly", or "monthly" (optional)
+            habit_name: Current name of the habit to update.
+            new_name: New name for the habit (optional).
+            target: New target value (optional).
+            unit: New unit of measurement (optional).
+            frequency: New frequency — "daily", "weekly", or "monthly" (optional).
         """
         return await log_tool_call(tools.update_habit)(
             ctx.deps, habit_name, new_name, target, unit, frequency
         )
-    
 
     @agent.tool
     async def delete_habit(ctx: RunContext[int], habit_name: str) -> dict:
         """Delete a habit permanently.
-        
+
         Args:
-            ctx: Agent context with user_id
-            habit_name: Name of the habit to delete (partial match supported)
+            habit_name: Name of the habit to delete (partial match supported).
         """
         return await log_tool_call(tools.delete_habit)(ctx.deps, habit_name)
-    
 
     @agent.tool
     async def update_log(
         ctx: RunContext[int],
         log_id: int,
         value: float | None = None,
-        notes: str | None = None
+        notes: str | None = None,
     ) -> dict:
         """Update a previous log entry.
-        
+
         Args:
-            ctx: Agent context with user_id
-            log_id: ID of the log entry to update
-            value: New value (optional)
-            notes: New notes (optional)
+            log_id: ID of the log entry to update.
+            value: New value (optional).
+            notes: New notes (optional).
         """
         return await log_tool_call(tools.update_log)(ctx.deps, log_id, value, notes)
-    
 
     @agent.tool
     async def delete_log(ctx: RunContext[int], log_id: int) -> dict:
         """Delete a log entry.
-        
+
         Args:
-            ctx: Agent context with user_id
-            log_id: ID of the log entry to delete
+            log_id: ID of the log entry to delete.
         """
         return await log_tool_call(tools.delete_log)(ctx.deps, log_id)
-    
-    model_name = settings.anthropic_model if settings.ai_provider == "anthropic" else settings.openai_model
+
+    model_name = (
+        settings.anthropic_model
+        if settings.ai_provider == "anthropic"
+        else settings.openai_model
+    )
     logger.info(f"Agent initialized with model: {model_name}")
     return agent
 
 
-
-async def run_agent(
-        message: str,
-        user_id: int,
-        conversation_id: int | None = None
+async def _run_freeform(
+    message: str, user_id: int, conversation_id: int | None = None
 ) -> AgentResponse:
-    """
-    Run the agent with a user message.
+    """Freeform agent: single LLM call, model decides tool order.
 
     If conversation_id is provided, saves the exchange to the database.
     """
@@ -202,61 +183,59 @@ async def run_agent(
 
     logger.debug(f"Running agent for user {user_id}: {message[:50]}...")
 
-    result = await agent.run(message, deps=user_id, usage_limits=UsageLimits(request_limit=15, tool_calls_limit=5))
+    result = await agent.run(
+        message,
+        deps=user_id,
+        usage_limits=UsageLimits(request_limit=15, tool_calls_limit=5),
+    )
     elapsed_ms = (perf_counter() - start) * 1000
 
-    # Extract usage info if available
     usage = result.usage()
     input_tokens = usage.input_tokens if usage else 0
     output_tokens = usage.output_tokens if usage else 0
 
-    # Log the run with metrics
     log_agent_run(
         user_id=user_id,
         message=message,
         response=result.output.message,
         elapsed_ms=elapsed_ms,
         input_tokens=input_tokens,
-        output_tokens=output_tokens
+        output_tokens=output_tokens,
     )
 
-    # Save messages to conversation if provided
     if conversation_id:
         await queries.add_message(conversation_id, "user", message)
         await queries.add_message(conversation_id, "assistant", result.output.message)
-    
+
     return result.output
 
 
-async def run_agent_stream(
-        message: str,
-        user_id: int,
-        conversation_id: int | None = None
+async def _run_freeform_stream(
+    message: str, user_id: int, conversation_id: int | None = None
 ) -> AsyncIterator[str]:
-    """
-    Stream agent response using PydanticAI's native streaming.
-    Single API call. Tools execute via PydanticAI's internal loop
-    Yields text chunks as they arrive.
+    """Freeform streaming: single API call, model decides tool order.
+
+    Yields text chunks as they arrive via stream_text(delta=True).
     """
     start = perf_counter()
     agent = get_agent()
 
     logger.debug(f"Starting stream for user {user_id}: {message[:50]}...")
 
-    # Load conversation history if available
     history: list[ModelRequest | ModelResponse] = []
     if conversation_id:
         recent = await queries.get_recent_messages(conversation_id, user_id, limit=10)
         for msg in recent:
             if msg["role"] == "user":
-                history.append(ModelRequest(parts=[UserPromptPart(content=msg["content"])]))
+                history.append(
+                    ModelRequest(parts=[UserPromptPart(content=msg["content"])])
+                )
             else:
                 history.append(ModelResponse(parts=[TextPart(content=msg["content"])]))
-    
-    # Save user message before streaming starts
+
     if conversation_id:
         await queries.add_message(conversation_id, "user", message)
-    
+
     full_response: list[str] = []
 
     async with agent.run_stream(
@@ -271,7 +250,6 @@ async def run_agent_stream(
                 full_response.append(chunk)
                 yield chunk
 
-    # After stream complete - save and log
     elapsed_ms = (perf_counter() - start) * 1000
     response_text = "".join(full_response)
 
@@ -284,4 +262,36 @@ async def run_agent_stream(
         response=response_text,
         elapsed_ms=elapsed_ms,
     )
-    
+
+
+async def run_agent(
+    message: str,
+    user_id: int,
+    conversation_id: int | None = None,
+    awaiting: str | None = None,
+    context: dict | None = None,
+) -> AgentResponse:
+    """Route to graph or freeform agent based on CONTROL_MODEL setting."""
+    from app.agent.graph_agent import run_graph_agent  # lazy import avoids circular deps
+
+    if get_settings().control_model == "graph":
+        return await run_graph_agent(message, user_id, conversation_id, awaiting, context)
+    return await _run_freeform(message, user_id, conversation_id)
+
+
+async def run_agent_stream(
+    message: str,
+    user_id: int,
+    conversation_id: int | None = None,
+    awaiting: str | None = None,
+    context: dict | None = None,
+) -> AsyncIterator[str]:
+    """Route streaming to graph or freeform agent based on CONTROL_MODEL setting."""
+    from app.agent.graph_agent import run_graph_stream  # lazy import avoids circular deps
+
+    if get_settings().control_model == "graph":
+        async for chunk in run_graph_stream(message, user_id, conversation_id, awaiting, context):
+            yield chunk
+    else:
+        async for chunk in _run_freeform_stream(message, user_id, conversation_id):
+            yield chunk
