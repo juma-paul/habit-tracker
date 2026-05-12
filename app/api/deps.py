@@ -1,10 +1,10 @@
-"""FasfAPI dependencies."""
+"""FastAPI dependencies."""
 
 from typing import Annotated
 
 import jwt
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from fastapi import Depends, HTTPException, Request
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 
 from app.core.config import get_settings
 from app.db import queries
@@ -32,10 +32,10 @@ async def get_current_user_id(request: Request) -> int:
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
         )
-    except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    except ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Token expired") from exc
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid token") from exc
 
     external_id: str = payload["userId"]
     email: str = payload.get("email", "")

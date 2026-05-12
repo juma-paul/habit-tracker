@@ -18,6 +18,15 @@ async def get_user_by_id(user_id: int) -> dict | None:
         return await cur.fetchone()
 
 
+async def update_user_name(user_id: int, name: str) -> None:
+    """Update the display name for an existing user."""
+    async with get_conn() as conn:
+        await conn.execute(
+            "UPDATE users SET name = %s WHERE id = %s",
+            (name, user_id),
+        )
+
+
 async def get_or_create_user(external_id: str, email: str, name: str = "") -> dict:
     """Get existing user by AuthKit UUID or create on first login."""
     async with get_conn() as conn:
@@ -406,7 +415,7 @@ async def add_message(conversation_id: int, role: str, content: str) -> dict:
             )
             conv = await cur.fetchone()
 
-            if conv and conv["title"] == "New Chat":
+            if conv and conv["title"] in ("New Chat", "Voice Conversation"):
                 # Generate title from first 50 chars of message
                 title = content[:50].strip()
                 if len(content) > 50:

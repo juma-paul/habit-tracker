@@ -2,16 +2,15 @@
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.agent.agent import run_agent
-from app.services.voice import transcribe, text_to_speech
-from app.models.schemas import VoiceResponse
 from app.api.deps import CurrentUser
-
+from app.models.schemas import VoiceResponse
+from app.services.voice import text_to_speech, transcribe
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 limiter = Limiter(key_func=get_remote_address)

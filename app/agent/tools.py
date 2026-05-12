@@ -76,13 +76,21 @@ async def update_habit(
 
 
 async def delete_habit(user_id: int, habit_name: str) -> dict:
-    """Delete a habit."""
+    """Delete a habit by name."""
     habit = await queries.find_habit_by_name(user_id, habit_name)
     if not habit:
         return {"error": f"No habit found matching '{habit_name}'"}
 
     deleted = await queries.delete_habit(habit["id"], user_id)
     return {"habit": deleted, "message": f"Deleted habit: {habit['name']}"}
+
+
+async def delete_habit_by_id(user_id: int, habit_id: int) -> dict:
+    """Delete a specific habit by database ID (used after disambiguation)."""
+    deleted = await queries.delete_habit(habit_id, user_id)
+    if not deleted:
+        return {"error": "Habit not found or already deleted"}
+    return {"habit": deleted, "message": f"Deleted habit: {deleted['name']}"}
 
 
 async def update_log(

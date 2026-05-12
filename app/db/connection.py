@@ -1,5 +1,5 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import psycopg
 from psycopg.rows import dict_row
@@ -10,7 +10,6 @@ from app.core.config import settings
 _pool: AsyncConnectionPool | None = None
 
 
-# Initialize connection
 async def init_pool() -> None:
     """Initialize the connection pool. Call once at startup."""
     global _pool
@@ -25,7 +24,6 @@ async def init_pool() -> None:
     await _pool.open()
 
 
-# Close connection pool
 async def close_pool() -> None:
     """Close connection pool. Call at shutdown."""
     global _pool
@@ -34,7 +32,6 @@ async def close_pool() -> None:
         _pool = None
 
 
-# Get a connection from the pool
 @asynccontextmanager
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
     """Get a database connection from the pool."""

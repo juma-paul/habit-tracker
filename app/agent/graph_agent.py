@@ -3,39 +3,43 @@
 Control flow lives in Python (graph edges), not in the LLM.
 Two LLM calls per request: ClassifyIntent (structured extraction) and
 FormatResponse (friendly prose). All nodes between them are pure Python.
-
-Enabled via CONTROL_MODEL=graph in .env (default: freeform).
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import lru_cache
 from time import perf_counter
-from typing import AsyncIterator, cast
+from typing import cast
 
 from loguru import logger
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_graph import BaseNode, End, Graph, GraphRunContext
 
+from app.agent import tools
 from app.core.config import get_settings
 from app.core.logging import log_agent_run
-from app.models.schemas import AgentResponse, AgentStatus
-from app.agent import tools
 from app.db import queries
+from app.models.schemas import AgentResponse, AgentStatus
 
 
-def _build_model():
-    """Return the configured AI model (Anthropic or OpenAI)."""
+def _build_model(*, fast: bool = False):
+    """Return the configured LLM.
+
+    fast=True  → Haiku / gpt-4o-mini  (structured extraction)
+    fast=False → configured model      (response formatting)
+    """
     settings = get_settings()
     if settings.ai_provider == "anthropic":
         from pydantic_ai.models.anthropic import AnthropicModel
         from pydantic_ai.providers.anthropic import AnthropicProvider
 
+        assert settings.anthropic_api_key is not None, "ANTHROPIC_API_KEY must be set when AI_PROVIDER=anthropic"
         return AnthropicModel(
-            settings.anthropic_model,
+            "claude-haiku-4-5-20251001" if fast else settings.anthropic_model,
             provider=AnthropicProvider(
                 api_key=settings.anthropic_api_key.get_secret_value()
             ),
@@ -43,8 +47,9 @@ def _build_model():
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
+    assert settings.openai_api_key is not None, "OPENAI_API_KEY must be set when AI_PROVIDER=openai"
     return OpenAIChatModel(
-        settings.openai_model,
+        "gpt-4o-mini" if fast else settings.openai_model,
         provider=OpenAIProvider(api_key=settings.openai_api_key.get_secret_value()),
     )
 
@@ -64,36 +69,70 @@ class IntentResult(BaseModel):
 
 @lru_cache
 def _get_classifier() -> Agent:
-    """Intent-classification agent. No tools; returns IntentResult."""
+    """Intent-classification agent. Uses fast model — simple extraction, no quality needed."""
     return Agent(
-        model=_build_model(),
+        model=_build_model(fast=True),
         output_type=IntentResult,
         system_prompt=(
             "You extract the user's intent and habit details from a single message.\n\n"
             "Return exactly one of these intents:\n"
             "- log: user reports doing something ('I ran 5km', 'walked 8000 steps').\n"
             "  Extract habit_name AND habit_value (number only). If no number given, habit_value=null.\n"
-            "- create: user explicitly sets up a new habit ('create a running habit').\n"
+            "- create: user explicitly sets up a new habit ('create a running habit', 'add water drinking').\n"
             "  Extract habit_name, habit_target, habit_unit, habit_frequency.\n"
-            "- list: user wants to see their habits ('show my habits', 'what am I tracking?').\n"
-            "- progress: user wants stats ('how am I doing with reading?', 'my running stats').\n"
-            "  Extract habit_name and days (default 7).\n"
-            "- delete: user wants to permanently remove a HABIT ('delete running habit', 'remove reading').\n"
-            "  Extract habit_name. If unclear which habit, leave habit_name null.\n"
+            "- list: user wants to see their habits ('show my habits', 'what am I tracking?', 'list my habits',\n"
+            "  'what habits do I have?', 'show me my habits'). Use ONLY when asking for the habit definitions.\n"
+            "- progress: user wants performance data or stats — for one habit OR all habits.\n"
+            "  Examples: 'how am I doing with reading?', 'my running stats', 'show my overall progress',\n"
+            "  'how is my progress', 'all my progress', 'overall stats', 'how have I been doing'.\n"
+            "  Extract habit_name (null if asking about ALL habits) and days (default 7).\n"
+            "- delete: user wants to permanently remove a HABIT (not a log entry).\n"
+            "  Examples: 'delete running habit', 'remove reading', 'remove the water drinking habit',\n"
+            "  'delete the one without a target', 'remove the duplicate'.\n"
+            "  Use delete even for vague references like 'remove it' or 'delete that one' when context\n"
+            "  suggests a habit (not a log). Extract habit_name if identifiable; null if unclear.\n"
             "- update_habit: user wants to CHANGE a habit's settings — not a log entry.\n"
-            "  Examples: 'change my running goal to 10km', 'rename meditation to mindfulness', 'make reading weekly'.\n"
-            "  Extract habit_name (current name), new_habit_name (if renaming), habit_target, habit_unit, habit_frequency.\n"
-            "- fix_log: user wants to CORRECT a previous log entry ('I made a mistake', 'only ran 3km not 5', 'fix my log').\n"
-            "  Extract habit_name and habit_value (the CORRECT value, not the wrong one).\n"
-            "- delete_log: user wants to REMOVE a specific log entry — NOT delete the habit itself.\n"
-            "  Examples: 'delete my running log from today', 'remove that last entry', 'undo my last log'.\n"
-            "  Extract habit_name.\n"
-            "- other: anything else.\n\n"
+            "  Examples: 'change my running goal to 10km', 'rename meditation to mindfulness',\n"
+            "  'update the target to 12 glasses', 'set goal to 8000 steps', 'make reading weekly'.\n"
+            "  Extract habit_name (current name), new_habit_name (if renaming), habit_target, habit_unit,\n"
+            "  habit_frequency. For 'update target to 12 glasses': habit_target=12, habit_unit='glasses'.\n"
+            "- fix_log: user wants to CORRECT a previous log entry ('I made a mistake', 'only ran 3km not 5').\n"
+            "  Extract habit_name and habit_value (the CORRECT value).\n"
+            "- delete_log: user wants to REMOVE a specific LOG ENTRY — NOT the habit itself.\n"
+            "  Use ONLY when the user explicitly mentions log, entry, record, or undo:\n"
+            "  'delete my running log from today', 'remove that log entry', 'undo my last log',\n"
+            "  'delete the log', 'remove that entry'. Never use for habit deletion requests.\n"
+            "- other: greetings, thanks, small talk, or anything that isn't a habit-tracking action.\n\n"
+            "CRITICAL DISTINCTION — delete vs delete_log:\n"
+            "  delete      = removing the habit itself permanently ('delete running', 'remove it',\n"
+            "                'yes remove it', 'remove the duplicate', 'remove water drinking')\n"
+            "  delete_log  = removing a log ENTRY ('delete that log', 'undo my entry', 'remove the record')\n"
+            "  Default to delete when the message is ambiguous ('remove it', 'yes delete it').\n\n"
             "For habit_name, always use the gerund or noun form — never a past-tense verb.\n"
-            "Examples: 'I ran' → 'running', 'I meditated' → 'meditation', 'I read' → 'reading', "
-            "'I walked' → 'walking', 'I slept 8 hours' → 'sleep'.\n"
-            "Key distinction: 'delete running' = delete the habit (intent=delete). "
-            "'delete my running log' = delete a log entry (intent=delete_log)."
+            "Examples: 'I ran' → 'running', 'I meditated' → 'meditation', 'I read' → 'reading',\n"
+            "'water drinking' → 'water drinking' (keep full compound nouns intact, do not truncate).\n"
+            "Extract the COMPLETE habit name, e.g. 'water drinking' not just 'water'."
+        ),
+    )
+
+
+@lru_cache
+def _get_confirmation_agent() -> Agent:
+    """Single-purpose agent: returns True if the user is agreeing, False if declining."""
+    return Agent(
+        model=_build_model(fast=True),
+        output_type=bool,
+        system_prompt=(
+            "You decide whether a user's reply is an affirmative or negative response "
+            "to a yes/no confirmation prompt.\n"
+            "Return TRUE for any agreement, including:\n"
+            "  - Direct yes: yes, yeah, yep, yup, sure, ok, okay, correct, right, absolutely\n"
+            "  - Imperative commands that mean proceed: 'do it', 'go ahead', 'proceed', "
+            "'create it', 'delete it', 'confirm', 'make it', 'add it', 'yes create', 'yes delete'\n"
+            "  - Foreign language: sim (Portuguese), ja (German), oui (French), sí (Spanish)\n"
+            "  - Positive phrases: 'sounds good', 'let's do it', 'please do', 'go for it'\n"
+            "Return FALSE for any refusal: no, nope, cancel, stop, don't, nevermind, skip, etc.\n"
+            "When truly ambiguous (not clearly yes OR no), return false."
         ),
     )
 
@@ -103,19 +142,26 @@ def _get_formatter() -> Agent:
     """Formatting agent. No tools; turns tool output into friendly prose."""
     return Agent(
         model=_build_model(),
-        output_type=str,
+        output_type=str,  # fast=False → full-quality formatter
         system_prompt=(
             "You are a friendly habit tracking assistant. "
             "Given the user's original message and a tool result (JSON dict), "
-            "write a short warm response (1–3 sentences). "
+            "write a clear, warm response. "
             "Rules:\n"
+            "- ALWAYS respond in English, regardless of the user's language or device locale.\n"
             "- Use the user's exact words for habit names.\n"
             "- Never mention tool names or JSON keys.\n"
-            "- Include units with a space: '5 km', '30 min'.\n"
+            "- Always write units as full words: '5 kilometers', '30 minutes', '10 kilograms', "
+            "'8,000 steps', '2 hours', '500 grams'. Never use abbreviations (km, min, kg, g, etc.).\n"
             "- Use commas for large numbers: '8,000 steps'.\n"
-            "- For list/progress results, use markdown tables or bullet points.\n"
+            "- ALWAYS use a markdown table when showing lists of habits, logs, or progress. "
+            "  Table columns for habit lists: Habit | Target | Frequency | Streak. "
+            "  Table columns for logs/progress: Date | Habit | Value | vs. Target. "
+            "  Use | to separate columns and include a separator row (|---|---|). "
+            "  Never use plain bullet points for structured data.\n"
             "- For confirmations, one sentence is enough: 'Done! Logged 5 km for Running.'\n"
-            "- For error results, explain the problem clearly and suggest what to do."
+            "- For error results, explain the problem clearly and suggest what to do.\n"
+            "- Keep prose short (1-2 sentences) before/after tables."
         ),
     )
 
@@ -143,8 +189,22 @@ class HabitGraphState:
     existing_log_id: int | None = None
     existing_log_value: float | None = None
 
+    # Multiple log entries offered for selection during delete_log flow
+    candidate_logs: list[dict] | None = None
+
+    # Set during deletion disambiguation when user has two habits with identical names
+    habit_id: int | None = None    # the specific habit to delete (by DB id)
+    habit_ids: list[int] | None = None  # candidates shown in the numbered list
+
     tool_result: dict | None = None
     response: str | None = None
+
+    # When set, the streaming path should stream this prompt through _get_formatter()
+    # instead of using the pre-baked response.  Set by FormatResponse.
+    format_prompt: str | None = None
+
+    # Recent conversation history injected by _run_graph_and_get_state for context
+    conversation_history: str | None = None
 
     # Multi-turn confirmation state sent by the client:
     # "create_confirm" | "delete_confirm" | "log_value" |
@@ -152,21 +212,14 @@ class HabitGraphState:
     awaiting: str | None = None
 
 
-def _confirmed(message: str) -> bool:
-    """Return True if the user's message is an affirmative reply."""
-    return message.strip().lower() in {
-        "yes",
-        "y",
-        "yeah",
-        "yep",
-        "sure",
-        "ok",
-        "okay",
-        "create it",
-        "do it",
-        "go ahead",
-        "confirm",
-    }
+async def _confirmed(message: str) -> bool:
+    """Return True if the user's message is an affirmative reply.
+
+    Uses the LLM so any natural language confirmation works — 'Yeah!',
+    'sure thing', 'sim' (Portuguese), 'ja' (German), etc.
+    """
+    result = await _get_confirmation_agent().run(message)
+    return cast(bool, result.output)
 
 
 @dataclass
@@ -195,7 +248,13 @@ class ClassifyIntent(BaseNode[HabitGraphState]):
             return HandleConfirmation()
 
         logger.debug(f"Graph: classifying {state.message[:50]!r}")
-        result = await _get_classifier().run(state.message)
+        classify_input = state.message
+        if state.conversation_history:
+            classify_input = (
+                f"Recent conversation context:\n{state.conversation_history}\n\n"
+                f"Current message to classify: {state.message}"
+            )
+        result = await _get_classifier().run(classify_input)
         intent = cast(IntentResult, result.output)
 
         state.intent = intent.intent
@@ -211,51 +270,91 @@ class ClassifyIntent(BaseNode[HabitGraphState]):
             f"Graph: intent={state.intent!r} habit={state.habit_name!r} value={state.habit_value!r}"
         )
 
-        if intent.intent == "log":
-            if state.habit_value is None:
-                return AskForValueNode()
-            return CheckHabitExists()
+        match intent.intent:
+            case "log":
+                if state.habit_value is None:
+                    return AskForValueNode()
+                return CheckHabitExists()
 
-        elif intent.intent == "list":
-            return ListHabitsNode()
+            case "list":
+                return ListHabitsNode()
 
-        elif intent.intent == "progress":
-            return GetProgressNode()
+            case "progress":
+                return GetProgressNode()
 
-        elif intent.intent == "create":
-            return AskCreateConfirmation()
+            case "create":
+                # Prevent duplicates — check if a habit with this name already exists
+                if state.habit_name:
+                    existing_result = await tools.list_habits(state.user_id)
+                    name_lower = state.habit_name.lower()
+                    existing = next(
+                        (
+                            h
+                            for h in existing_result.get("habits", [])
+                            if name_lower in h["name"].lower()
+                            or h["name"].lower() in name_lower
+                        ),
+                        None,
+                    )
+                    if existing:
+                        target_info = (
+                            f" with a target of {existing['target']} {existing.get('unit', '')}".rstrip()
+                            if existing.get("target")
+                            else ""
+                        )
+                        state.response = (
+                            f"You already have a '{existing['name']}' habit{target_info}. "
+                            "Would you like to update its settings instead?"
+                        )
+                        return End(
+                            AgentResponse(
+                                status=AgentStatus.success, message=state.response
+                            )
+                        )
+                # User explicitly said "create" — no confirmation needed
+                return CreateHabitNode()
 
-        elif intent.intent == "delete":
-            if not state.habit_name:
-                state.response = "Which habit would you like to delete?"
-                return End(
-                    AgentResponse(status=AgentStatus.success, message=state.response)
+            case "delete":
+                if not state.habit_name:
+                    # Show the user's habits so they can name one precisely
+                    habits_result = await tools.list_habits(state.user_id)
+                    habits = habits_result.get("habits", [])
+                    if habits:
+                        names = ", ".join(f"'{h['name']}'" for h in habits)
+                        state.response = (
+                            f"Which habit would you like to delete? Your habits: {names}."
+                        )
+                    else:
+                        state.response = "You don't have any habits to delete yet."
+                    return End(
+                        AgentResponse(status=AgentStatus.success, message=state.response)
+                    )
+                return AskDeleteConfirmation()
+
+            case "update_habit":
+                return UpdateHabitNode()
+
+            case "fix_log":
+                state.log_action = "fix"
+                return FetchRecentLogsNode()
+
+            case "delete_log":
+                state.log_action = "delete_log"
+                return FetchRecentLogsNode()
+
+            case _:
+                # Conversational, social, or genuinely unclear — let the formatter respond
+                # naturally rather than returning a hardcoded suggestions list.
+                state.format_prompt = (
+                    f"User said: '{state.message}'\n"
+                    "This is a conversational message — a greeting, thanks, small talk, "
+                    "or something that doesn't map to a habit tracking action. "
+                    "Respond warmly and naturally in 1-2 sentences. "
+                    "If it's thanks or a compliment, accept gracefully. "
+                    "If it's truly unclear what they want, gently mention you help with "
+                    "habit tracking — but do NOT list commands or use bullet points."
                 )
-            return AskDeleteConfirmation()
-
-        elif intent.intent == "update_habit":
-            return UpdateHabitNode()
-
-        elif intent.intent == "fix_log":
-            state.log_action = "fix"
-            return FetchRecentLogsNode()
-
-        elif intent.intent == "delete_log":
-            state.log_action = "delete_log"
-            return FetchRecentLogsNode()
-
-        else:
-            state.response = (
-                "I can help you track habits! Try:\n"
-                "- 'I ran 5 km'\n"
-                "- 'show my habits'\n"
-                "- 'how am I doing with reading this week?'\n"
-                "- 'change my running goal to 10 km'\n"
-                "- 'I made a mistake, I only ran 3 km'"
-            )
-            return End(
-                AgentResponse(status=AgentStatus.success, message=state.response)
-            )
+                return End(AgentResponse(status=AgentStatus.success, message=""))
 
 
 @dataclass
@@ -266,88 +365,290 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
         self, ctx: GraphRunContext[HabitGraphState, None]
     ) -> (
         CheckHabitExists
+        | AskCreateConfirmation
+        | AskForValueNode
         | CreateHabitNode
         | DeleteHabitNode
+        | ListHabitsNode
+        | GetProgressNode
+        | AskDeleteConfirmation
+        | FetchRecentLogsNode
         | LogActivityNode
+        | UpdateHabitNode
         | UpdateTodayLogNode
         | UpdateLogNode
         | DeleteLogNode
         | End[AgentResponse]
     ):
         state = ctx.state
-        confirmed = _confirmed(state.message)
+        confirmed = await _confirmed(state.message)
 
-        if state.awaiting == "create_confirm":
-            state.awaiting = None
-            if confirmed:
-                state.log_after_create = state.habit_value is not None
-                return CreateHabitNode()
-            state.response = f"No problem! I won't create '{state.habit_name}'."
-            return End(
-                AgentResponse(status=AgentStatus.success, message=state.response)
-            )
-
-        if state.awaiting == "delete_confirm":
-            state.awaiting = None
-            if confirmed:
-                return DeleteHabitNode()
-            state.response = f"Got it — '{state.habit_name}' is safe."
-            return End(
-                AgentResponse(status=AgentStatus.success, message=state.response)
-            )
-
-        if state.awaiting == "log_value":
-            match = re.search(r"\d+\.?\d*", state.message)
-            if match:
-                state.habit_value = float(match.group())
+        match state.awaiting:
+            case "create_confirm":
                 state.awaiting = None
-                return CheckHabitExists()
-            state.response = (
-                "I didn't catch a number. How much did you do? (e.g. '30', '5.5')"
-            )
-            return End(
-                AgentResponse(
-                    status=AgentStatus.clarification,
-                    message=state.response,
-                    data={"awaiting": "log_value", "habit_name": state.habit_name},
-                )
-            )
+                # Always re-classify — user may include target/unit/frequency in their
+                # confirmation ("yes, with a goal of 12 glasses daily") or send a
+                # completely different request ("show my habits") that should be honoured.
+                result = await _get_classifier().run(state.message)
+                intent = cast(IntentResult, result.output)
 
-        if state.awaiting == "duplicate_confirm":
-            state.awaiting = None
-            msg = state.message.strip().lower()
-            if any(w in msg for w in ("add", "another", "new", "both", "second")):
-                return LogActivityNode()
-            elif any(w in msg for w in ("update", "change", "replace", "fix", "edit")):
-                return UpdateTodayLogNode()
-            else:
-                state.response = "OK, nothing was changed."
+                if confirmed:
+                    # Merge any details the user added in their confirmation message
+                    state.habit_name = intent.habit_name or state.habit_name
+                    if intent.habit_target is not None:
+                        state.habit_target = intent.habit_target
+                    if intent.habit_unit is not None:
+                        state.habit_unit = intent.habit_unit
+                    if intent.habit_frequency is not None:
+                        state.habit_frequency = intent.habit_frequency
+                    if intent.habit_value is not None:
+                        state.habit_value = intent.habit_value
+                    state.log_after_create = state.habit_value is not None
+                    return CreateHabitNode()
+
+                # Not a confirmation — if it's a different valid intent, honour it.
+                match intent.intent:
+                    case "create":
+                        state.habit_name = intent.habit_name or state.habit_name
+                        state.habit_target = intent.habit_target
+                        state.habit_unit = intent.habit_unit
+                        state.habit_frequency = intent.habit_frequency
+                        state.habit_value = intent.habit_value
+                        state.log_after_create = state.habit_value is not None
+                        return CreateHabitNode()
+                    case "list":
+                        return ListHabitsNode()
+                    case "progress":
+                        state.habit_name = intent.habit_name
+                        state.days = intent.days
+                        return GetProgressNode()
+                    case "log":
+                        state.habit_name = intent.habit_name or state.habit_name
+                        state.habit_value = intent.habit_value
+                        if state.habit_value is None:
+                            return AskForValueNode()
+                        return CheckHabitExists()
+                    case "delete":
+                        state.habit_name = intent.habit_name
+                        if not state.habit_name:
+                            state.response = "Which habit would you like to delete?"
+                            return End(
+                                AgentResponse(
+                                    status=AgentStatus.success, message=state.response
+                                )
+                            )
+                        return AskDeleteConfirmation()
+                    case "update_habit":
+                        state.habit_name = intent.habit_name or state.habit_name
+                        state.new_habit_name = intent.new_habit_name
+                        state.habit_target = intent.habit_target
+                        state.habit_unit = intent.habit_unit
+                        state.habit_frequency = intent.habit_frequency
+                        return UpdateHabitNode()
+                    case _:
+                        # Genuinely a cancel / unrecognised
+                        state.response = f"No problem! I won't create '{state.habit_name}'."
+                        return End(
+                            AgentResponse(status=AgentStatus.success, message=state.response)
+                        )
+
+            case "delete_disambiguate":
+                state.awaiting = None
+                ids = state.habit_ids or []
+                if not ids:
+                    state.response = (
+                        "Sorry, I lost track. Please say 'delete [habit name]' to try again."
+                    )
+                    return End(
+                        AgentResponse(status=AgentStatus.success, message=state.response)
+                    )
+
+                # Parse the user's choice — try number first, then ordinal words
+                msg_lower = state.message.strip().lower()
+                index: int | None = None
+
+                num_match = re.search(r"\b([1-9])\b", state.message)
+                if num_match:
+                    n = int(num_match.group(1))
+                    if 1 <= n <= len(ids):
+                        index = n - 1
+
+                if index is None:
+                    # Named words checked before number-words so "second one" matches
+                    # "second" (index 1) rather than "one" (index 0).
+                    # Word boundaries prevent "one" from matching inside "someone".
+                    ordinals = {
+                        "first": 0, "second": 1, "third": 2,
+                        "one": 0, "two": 1, "three": 2,
+                    }
+                    for word, idx in ordinals.items():
+                        if re.search(rf"\b{word}\b", msg_lower) and idx < len(ids):
+                            index = idx
+                            break
+
+                if index is None:
+                    # Couldn't parse — re-prompt
+                    numbered = "\n".join(f"  {i + 1}." for i in range(len(ids)))
+                    state.response = (
+                        f"Please reply with a number (1–{len(ids)})."
+                    )
+                    return End(
+                        AgentResponse(
+                            status=AgentStatus.success,
+                            message=state.response,
+                            data={
+                                "awaiting": "delete_disambiguate",
+                                "habit_ids": ids,
+                                "habit_name": state.habit_name,
+                            },
+                        )
+                    )
+
+                state.habit_id = ids[index]
+                # Fetch the selected habit for a labelled confirmation prompt
+                chosen = await queries.get_habit(state.habit_id, state.user_id)
+                label = _habit_label(dict(chosen)) if chosen else ""
+                display = (
+                    f"'{state.habit_name}' ({label})"
+                    if label
+                    else f"'{state.habit_name}'"
+                )
+                state.response = (
+                    f"Delete {display}? This cannot be undone. Reply 'yes' to confirm."
+                )
+                return End(
+                    AgentResponse(
+                        status=AgentStatus.success,
+                        message=state.response,
+                        data={
+                            "awaiting": "delete_confirm",
+                            "habit_id": state.habit_id,
+                            "habit_name": state.habit_name,
+                        },
+                    )
+                )
+
+            case "delete_confirm":
+                state.awaiting = None
+                if confirmed:
+                    return DeleteHabitNode()
+                state.response = f"Got it — '{state.habit_name}' is safe."
                 return End(
                     AgentResponse(status=AgentStatus.success, message=state.response)
                 )
 
-        if state.awaiting == "fix_log_confirm":
-            state.awaiting = None
-            if confirmed:
-                return UpdateLogNode()
-            state.response = "OK, I'll leave your log as is."
-            return End(
-                AgentResponse(status=AgentStatus.success, message=state.response)
-            )
+            case "log_value":
+                num_match = re.search(r"\d+\.?\d*", state.message)
+                if num_match:
+                    state.habit_value = float(num_match.group())
+                    state.awaiting = None
+                    return CheckHabitExists()
+                state.response = (
+                    "I didn't catch a number. How much did you do? (e.g. '30', '5.5')"
+                )
+                return End(
+                    AgentResponse(
+                        status=AgentStatus.clarification,
+                        message=state.response,
+                        data={"awaiting": "log_value", "habit_name": state.habit_name},
+                    )
+                )
 
-        if state.awaiting == "delete_log_confirm":
-            state.awaiting = None
-            if confirmed:
-                return DeleteLogNode()
-            state.response = "Got it — log entry kept."
-            return End(
-                AgentResponse(status=AgentStatus.success, message=state.response)
-            )
+            case "duplicate_confirm":
+                state.awaiting = None
+                msg_lower = state.message.strip().lower()
+                if confirmed or any(
+                    w in msg_lower for w in ("add", "another", "new", "both", "second")
+                ):
+                    return LogActivityNode()
+                elif any(
+                    w in msg_lower
+                    for w in ("update", "change", "replace", "fix", "edit", "today")
+                ):
+                    return UpdateTodayLogNode()
+                else:
+                    state.response = "OK, nothing was changed."
+                    return End(
+                        AgentResponse(status=AgentStatus.success, message=state.response)
+                    )
 
-        state.response = (
-            "I'm not sure what you're confirming. What would you like to do?"
-        )
-        return End(AgentResponse(status=AgentStatus.success, message=state.response))
+            case "fix_log_confirm":
+                state.awaiting = None
+                if confirmed:
+                    return UpdateLogNode()
+                state.response = "OK, I'll leave your log as is."
+                return End(
+                    AgentResponse(status=AgentStatus.success, message=state.response)
+                )
+
+            case "delete_log_select":
+                state.awaiting = None
+                logs = state.candidate_logs or []
+                msg_lower = state.message.strip().lower()
+
+                # Try to parse a number
+                log_idx: int | None = None
+                try:
+                    log_idx = int(msg_lower) - 1
+                except ValueError:
+                    ordinals = {
+                        "first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4,
+                        "one": 0, "two": 1, "three": 2, "four": 3, "five": 4,
+                    }
+                    for word, pos in ordinals.items():
+                        if re.search(rf"\b{word}\b", msg_lower):
+                            log_idx = pos
+                            break
+
+                if log_idx is None or log_idx < 0 or log_idx >= len(logs):
+                    state.response = f"Please reply with a number between 1 and {len(logs)}."
+                    return End(
+                        AgentResponse(
+                            status=AgentStatus.success,
+                            message=state.response,
+                            data={
+                                "awaiting": "delete_log_select",
+                                "candidate_logs": logs,
+                                "habit_name": state.habit_name,
+                            },
+                        )
+                    )
+
+                chosen = logs[log_idx]
+                state.existing_log_id = chosen["id"]
+                state.existing_log_value = chosen["value"]
+                date_str = str(chosen["logged_at"])[:10]
+                state.response = (
+                    f"Delete log #{log_idx + 1} ({chosen['value']} on {date_str})? "
+                    "This cannot be undone. Reply 'yes' to confirm."
+                )
+                return End(
+                    AgentResponse(
+                        status=AgentStatus.success,
+                        message=state.response,
+                        data={
+                            "awaiting": "delete_log_confirm",
+                            "log_id": state.existing_log_id,
+                            "value": state.existing_log_value,
+                            "habit_name": state.habit_name,
+                        },
+                    )
+                )
+
+            case "delete_log_confirm":
+                state.awaiting = None
+                if confirmed:
+                    return DeleteLogNode()
+                state.response = "Got it — log entry kept."
+                return End(
+                    AgentResponse(status=AgentStatus.success, message=state.response)
+                )
+
+            case _:
+                state.response = (
+                    "I'm not sure what you're confirming. What would you like to do?"
+                )
+                return End(AgentResponse(status=AgentStatus.success, message=state.response))
 
 
 @dataclass
@@ -467,12 +768,62 @@ class AskCreateConfirmation(BaseNode[HabitGraphState]):
 
 @dataclass
 class AskDeleteConfirmation(BaseNode[HabitGraphState]):
-    """Prompt before permanently deleting a habit."""
+    """Prompt before permanently deleting a habit.
+
+    If multiple habits match the name, list them so the user can be precise.
+    """
 
     async def run(
         self, ctx: GraphRunContext[HabitGraphState, None]
     ) -> End[AgentResponse]:
         state = ctx.state
+        assert state.habit_name is not None
+
+        # Check for ambiguous match — multiple habits share the same substring
+        habits_result = await tools.list_habits(state.user_id)
+        name_lower = state.habit_name.lower()
+        matches = [
+            h
+            for h in habits_result.get("habits", [])
+            if name_lower in h["name"].lower() or h["name"].lower() in name_lower
+        ]
+
+        if len(matches) > 1:
+            # All names identical (e.g. two "water drinking" habits) — numbered list
+            if len({h["name"] for h in matches}) == 1:
+                options = "\n".join(
+                    f"  {i + 1}. {_habit_label(h)}" for i, h in enumerate(matches)
+                )
+                state.response = (
+                    f"I found {len(matches)} '{state.habit_name}' habits:\n\n"
+                    f"{options}\n\n"
+                    "Which one to delete? Reply with the number."
+                )
+                return End(
+                    AgentResponse(
+                        status=AgentStatus.success,
+                        message=state.response,
+                        data={
+                            "awaiting": "delete_disambiguate",
+                            "habit_ids": [h["id"] for h in matches],
+                            "habit_name": state.habit_name,
+                        },
+                    )
+                )
+            # Different names but overlapping — ask for the exact name
+            names = ", ".join(f"'{h['name']}'" for h in matches)
+            state.response = (
+                f"I found multiple habits matching '{state.habit_name}': {names}. "
+                "Which one would you like to delete? Please use the exact name."
+            )
+            return End(
+                AgentResponse(status=AgentStatus.success, message=state.response)
+            )
+
+        if len(matches) == 1:
+            # Lock onto the exact name so deletion can't miss
+            state.habit_name = matches[0]["name"]
+
         state.response = (
             f"Are you sure you want to permanently delete '{state.habit_name}'? "
             "This cannot be undone. Reply 'yes' to confirm."
@@ -555,14 +906,24 @@ class ListHabitsNode(BaseNode[HabitGraphState]):
 
 @dataclass
 class GetProgressNode(BaseNode[HabitGraphState]):
-    """Get progress statistics for a habit over `days` days."""
+    """Get progress statistics for one or all habits."""
 
     async def run(self, ctx: GraphRunContext[HabitGraphState, None]) -> FormatResponse:
         state = ctx.state
-        assert state.habit_name is not None
-        state.tool_result = await tools.get_progress(
-            state.user_id, state.habit_name, state.days
-        )
+        if state.habit_name:
+            state.tool_result = await tools.get_progress(
+                state.user_id, state.habit_name, state.days
+            )
+        else:
+            # "show my overall progress" — aggregate across all habits
+            all_habits = await tools.list_habits(state.user_id)
+            results = []
+            for habit in all_habits.get("habits", []):
+                progress = await tools.get_progress(
+                    state.user_id, habit["name"], state.days
+                )
+                results.append(progress)
+            state.tool_result = {"all_progress": results, "days": state.days}
         return FormatResponse()
 
 
@@ -570,9 +931,44 @@ class GetProgressNode(BaseNode[HabitGraphState]):
 class UpdateHabitNode(BaseNode[HabitGraphState]):
     """Update a habit's settings (name, target, unit, frequency)."""
 
-    async def run(self, ctx: GraphRunContext[HabitGraphState, None]) -> FormatResponse:
+    async def run(
+        self, ctx: GraphRunContext[HabitGraphState, None]
+    ) -> FormatResponse | End[AgentResponse]:
         state = ctx.state
         assert state.habit_name is not None
+
+        # Guard: verify habit exists before updating
+        habits_result = await tools.list_habits(state.user_id)
+        name_lower = state.habit_name.lower()
+        matches = [
+            h
+            for h in habits_result.get("habits", [])
+            if name_lower in h["name"].lower() or h["name"].lower() in name_lower
+        ]
+        if not matches:
+            habits = habits_result.get("habits", [])
+            if habits:
+                names = ", ".join(f"'{h['name']}'" for h in habits)
+                state.response = (
+                    f"I couldn't find '{state.habit_name}'. Your habits are: {names}."
+                )
+            else:
+                state.response = "You don't have any habits yet. Create one first!"
+            return End(
+                AgentResponse(status=AgentStatus.success, message=state.response)
+            )
+        if len(matches) > 1:
+            names = ", ".join(f"'{h['name']}'" for h in matches)
+            state.response = (
+                f"I found multiple habits matching '{state.habit_name}': {names}. "
+                "Which one would you like to update? Please use the exact name."
+            )
+            return End(
+                AgentResponse(status=AgentStatus.success, message=state.response)
+            )
+
+        # Use exact name from DB for the update call
+        state.habit_name = matches[0]["name"]
         result = await tools.update_habit(
             state.user_id,
             state.habit_name,
@@ -587,12 +983,21 @@ class UpdateHabitNode(BaseNode[HabitGraphState]):
 
 @dataclass
 class DeleteHabitNode(BaseNode[HabitGraphState]):
-    """Delete a habit after the user has confirmed."""
+    """Delete a habit after the user has confirmed.
+
+    Uses habit_id (by-ID deletion) when set — needed for disambiguating
+    habits with identical names. Falls back to name-based deletion otherwise.
+    """
 
     async def run(self, ctx: GraphRunContext[HabitGraphState, None]) -> FormatResponse:
         state = ctx.state
-        assert state.habit_name is not None
-        state.tool_result = await tools.delete_habit(state.user_id, state.habit_name)
+        if state.habit_id is not None:
+            state.tool_result = await tools.delete_habit_by_id(
+                state.user_id, state.habit_id
+            )
+        else:
+            assert state.habit_name is not None
+            state.tool_result = await tools.delete_habit(state.user_id, state.habit_name)
         return FormatResponse()
 
 
@@ -616,23 +1021,22 @@ class FetchRecentLogsNode(BaseNode[HabitGraphState]):
                 AgentResponse(status=AgentStatus.success, message=state.response)
             )
 
-        today_logs = await queries.get_today_logs(habit["id"], state.user_id)
-        if today_logs:
-            state.existing_log_id = today_logs[0]["id"]
-            state.existing_log_value = today_logs[0]["value"]
-        else:
-            recent = await queries.get_logs(habit["id"], state.user_id, days=7)
-            if recent:
-                state.existing_log_id = recent[0]["id"]
-                state.existing_log_value = recent[0]["value"]
-            else:
-                state.response = f"You haven't logged '{state.habit_name}' recently — nothing to change."
-                return End(
-                    AgentResponse(status=AgentStatus.success, message=state.response)
-                )
+        all_logs = await queries.get_logs(habit["id"], state.user_id, days=30)
+        if not all_logs:
+            state.response = f"You haven't logged '{state.habit_name}' recently — nothing to change."
+            return End(AgentResponse(status=AgentStatus.success, message=state.response))
+
+        state.existing_log_id = all_logs[0]["id"]
+        state.existing_log_value = all_logs[0]["value"]
 
         if state.log_action == "fix":
             return AskFixLogConfirmation()
+
+        # For delete: expose all recent logs so the user can pick by number
+        state.candidate_logs = [
+            {"id": r["id"], "value": r["value"], "logged_at": str(r["logged_at"])}
+            for r in all_logs
+        ]
         return AskDeleteLogConfirmation()
 
 
@@ -664,24 +1068,51 @@ class AskFixLogConfirmation(BaseNode[HabitGraphState]):
 
 @dataclass
 class AskDeleteLogConfirmation(BaseNode[HabitGraphState]):
-    """Ask user to confirm deleting a log entry (not the habit itself)."""
+    """Ask user to confirm deleting a log entry (not the habit itself).
+
+    If multiple logs exist, present a numbered list so the user can pick one.
+    If only one log exists, ask for direct confirmation.
+    """
 
     async def run(
         self, ctx: GraphRunContext[HabitGraphState, None]
     ) -> End[AgentResponse]:
         state = ctx.state
-        state.response = (
-            f"Delete your '{state.habit_name}' log entry ({state.existing_log_value})? "
-            "This cannot be undone. Reply 'yes' to confirm."
-        )
+        logs = state.candidate_logs or []
+
+        if len(logs) <= 1:
+            # Single log — direct confirmation
+            state.response = (
+                f"Delete your '{state.habit_name}' log entry ({state.existing_log_value})? "
+                "This cannot be undone. Reply 'yes' to confirm."
+            )
+            return End(
+                AgentResponse(
+                    status=AgentStatus.success,
+                    message=state.response,
+                    data={
+                        "awaiting": "delete_log_confirm",
+                        "log_id": state.existing_log_id,
+                        "value": state.existing_log_value,
+                        "habit_name": state.habit_name,
+                    },
+                )
+            )
+
+        # Multiple logs — numbered list
+        lines = [f"Here are your recent **{state.habit_name}** logs. Reply with a number to select one:\n"]
+        for i, log in enumerate(logs, 1):
+            date_str = str(log["logged_at"])[:10]
+            lines.append(f"{i}. {log['value']} — {date_str}")
+        state.response = "\n".join(lines)
         return End(
             AgentResponse(
                 status=AgentStatus.success,
                 message=state.response,
                 data={
-                    "awaiting": "delete_log_confirm",
-                    "log_id": state.existing_log_id,
-                    "value": state.existing_log_value,
+                    "awaiting": "delete_log_select",
+                    "candidate_logs": logs,
+                    "habit_name": state.habit_name,
                 },
             )
         )
@@ -717,20 +1148,20 @@ class DeleteLogNode(BaseNode[HabitGraphState]):
 
 @dataclass
 class FormatResponse(BaseNode[HabitGraphState]):
-    """LLM call #2 — turn tool_result into a user-facing message."""
+    """Store the format prompt for the caller to stream or run synchronously."""
 
     async def run(
         self, ctx: GraphRunContext[HabitGraphState, None]
     ) -> End[AgentResponse]:
         state = ctx.state
-        prompt = (
+        state.format_prompt = (
             f"User said: '{state.message}'\n"
             f"Tool result: {state.tool_result}\n"
             "Write a short, friendly response."
         )
-        result = await _get_formatter().run(prompt)
-        state.response = result.output
-        return End(AgentResponse(status=AgentStatus.success, message=state.response))
+        # Return an empty placeholder — callers inspect state.format_prompt
+        # and run the actual LLM call (streaming or not) themselves.
+        return End(AgentResponse(status=AgentStatus.success, message=""))
 
 
 habit_graph = Graph(
@@ -760,6 +1191,99 @@ habit_graph = Graph(
 )
 
 
+def _habit_label(h: dict) -> str:
+    """One-line description of a habit for disambiguation menus."""
+    target_str = (
+        f"{h['target']} {h.get('unit', '')}".strip()
+        if h.get("target") is not None
+        else "no target"
+    )
+    return f"{target_str}, {h.get('frequency', 'daily')}"
+
+
+def _restore_context(state: HabitGraphState, context: dict) -> None:
+    """Restore stateful fields from the client-echoed context payload."""
+    state.habit_name = context.get("habit_name")
+    state.habit_value = context.get("habit_value") or context.get("new_value")
+    state.existing_log_id = context.get("log_id")
+    state.existing_log_value = context.get("existing_value") or context.get("value")
+    state.habit_id = context.get("habit_id")
+    state.habit_ids = context.get("habit_ids")
+    state.candidate_logs = context.get("candidate_logs")
+
+
+async def _run_graph_and_get_state(
+    message: str,
+    user_id: int,
+    conversation_id: int | None,
+    awaiting: str | None,
+    context: dict | None,
+) -> tuple[HabitGraphState, AgentResponse]:
+    """Run the graph synchronously and return (state, response) without streaming.
+
+    Called before the SSE response starts so the endpoint can inspect
+    response.data.awaiting and set HTTP response headers before the body begins.
+    """
+    # Load history before saving current message so it isn't included
+    conversation_history: str | None = None
+    if conversation_id and not awaiting:
+        recent = await queries.get_recent_messages(conversation_id, user_id, limit=20)
+        if recent:
+            conversation_history = "\n".join(
+                f"{m['role'].upper()}: {m['content']}" for m in recent
+            )
+
+    state = HabitGraphState(
+        message=message,
+        user_id=user_id,
+        awaiting=awaiting,
+        conversation_history=conversation_history,
+    )
+    if awaiting and context:
+        _restore_context(state, context)
+    if conversation_id:
+        await queries.add_message(conversation_id, "user", message)
+    result = await habit_graph.run(start_node=ClassifyIntent(), state=state)
+    return state, cast(AgentResponse, result.output)
+
+
+async def stream_formatter_tokens(
+    state: HabitGraphState,
+    response: AgentResponse,
+    conversation_id: int | None,
+    user_id: int,
+    message: str,
+    start: float,
+) -> AsyncIterator[str]:
+    """Yield text tokens for the SSE body.
+
+    If state.format_prompt is set, stream the formatter LLM token-by-token.
+    Otherwise yield the direct response message as a single chunk.
+    In both cases, save the final message to the DB and log the run.
+    """
+    if state.format_prompt:
+        tokens: list[str] = []
+        async with _get_formatter().run_stream(state.format_prompt) as stream:
+            async for chunk in stream.stream_text(delta=True, debounce_by=None):
+                if chunk:
+                    tokens.append(chunk)
+                    yield chunk
+        response_text = "".join(tokens)
+    else:
+        response_text = response.message or ""
+        if response_text:
+            yield response_text
+
+    if conversation_id and response_text:
+        await queries.add_message(conversation_id, "assistant", response_text)
+    log_agent_run(
+        user_id=user_id,
+        message=message,
+        response=response_text,
+        elapsed_ms=(perf_counter() - start) * 1000,
+    )
+
+
 async def run_graph_agent(
     message: str,
     user_id: int,
@@ -767,24 +1291,16 @@ async def run_graph_agent(
     awaiting: str | None = None,
     context: dict | None = None,
 ) -> AgentResponse:
-    """Run the full graph and return a complete AgentResponse."""
+    """Run the full graph and return a complete AgentResponse (non-streaming)."""
     start = perf_counter()
-    state = HabitGraphState(message=message, user_id=user_id, awaiting=awaiting)
+    state, response = await _run_graph_and_get_state(
+        message, user_id, conversation_id, awaiting, context
+    )
 
-    # Restore stateful fields from the previous response's data payload.
-    # The server is stateless; the client echoes context back so we can
-    # reconstruct habit_name, log IDs, etc. before re-entering the graph.
-    if awaiting and context:
-        state.habit_name = context.get("habit_name")
-        state.habit_value = context.get("habit_value") or context.get("new_value")
-        state.existing_log_id = context.get("log_id")
-        state.existing_log_value = context.get("existing_value") or context.get("value")
+    if state.format_prompt:
+        fmt = await _get_formatter().run(state.format_prompt)
+        response = AgentResponse(status=AgentStatus.success, message=fmt.output)
 
-    if conversation_id:
-        await queries.add_message(conversation_id, "user", message)
-
-    result = await habit_graph.run(start_node=ClassifyIntent(), state=state)
-    response = cast(AgentResponse, result.output)
     elapsed_ms = (perf_counter() - start) * 1000
 
     if conversation_id and response.message:
@@ -806,10 +1322,17 @@ async def run_graph_stream(
     awaiting: str | None = None,
     context: dict | None = None,
 ) -> AsyncIterator[str]:
-    """Run the graph and yield the final message as a single chunk.
+    """Run the graph and stream response tokens.
 
-    True token-by-token streaming inside FormatResponse is a future enhancement.
+    The SSE chat endpoint calls _run_graph_and_get_state + stream_formatter_tokens
+    directly to control HTTP headers. This wrapper is used by the voice WebSocket
+    and any other callers that need a simple async iterator interface.
     """
-    response = await run_graph_agent(message, user_id, conversation_id, awaiting, context)
-    if response.message:
-        yield response.message
+    start = perf_counter()
+    state, response = await _run_graph_and_get_state(
+        message, user_id, conversation_id, awaiting, context
+    )
+    async for chunk in stream_formatter_tokens(
+        state, response, conversation_id, user_id, message, start
+    ):
+        yield chunk

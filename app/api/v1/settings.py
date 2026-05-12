@@ -2,10 +2,9 @@
 
 from fastapi import APIRouter
 
-from app.db import queries
-from app.models.schemas import UserSettingsResponse, SettingsUpdate
 from app.api.deps import CurrentUser
-
+from app.db import queries
+from app.models.schemas import SettingsUpdate, UserSettingsResponse
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 

@@ -15,10 +15,25 @@ def make_mock_stream(*chunks):
 
 def test_chat_stream_authenticated(auth_client):
     """POST /chat/stream with valid cookie returns SSE stream."""
-    with patch("app.api.v1.chat.run_agent_stream", new=make_mock_stream("Hello ", "world")):
+    from app.models.schemas import AgentResponse, AgentStatus
+    from app.agent.graph_agent import HabitGraphState
+
+    mock_state = HabitGraphState(message="Hello", user_id=1)
+    mock_response = AgentResponse(status=AgentStatus.success, message="Hi!")
+
+    async def _mock_run(*args, **kwargs):
+        return mock_state, mock_response
+
+    with (
+        patch("app.agent.graph_agent._run_graph_and_get_state", new=_mock_run),
+        patch(
+            "app.agent.graph_agent.stream_formatter_tokens",
+            new=make_mock_stream("Hi!"),
+        ),
+    ):
         response = auth_client.post(
             "/api/v1/chat/stream",
-            json={"message": "Hello"}
+            json={"message": "Hello"},
         )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")

@@ -1,34 +1,20 @@
 """Chat endpoints for AI interaction with streaming support."""
 
+import json
+from time import perf_counter
+
 from fastapi import APIRouter, HTTPException, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
-from app.agent.agent import run_agent, run_agent_stream
-from app.agent.help import HELP_CONTENT, HELP_DATA
-from app.models.schemas import ChatRequest, AgentResponse, AgentStatus
+from app.agent.agent import run_agent
 from app.api.deps import CurrentUser
 from app.db import queries
-
+from app.models.schemas import AgentResponse, ChatRequest
 
 router = APIRouter(tags=["chat"])
 limiter = Limiter(key_func=get_remote_address)
-
-
-def _is_help_command(message: str) -> bool:
-    """Check if message is a help command."""
-    msg = message.strip().lower()
-    return msg in ["/help", "/h", "?"]
-
-
-def _get_help_response() -> AgentResponse:
-    """Return help content as AgentResponse."""
-    return AgentResponse(
-        status=AgentStatus.success,
-        message=HELP_CONTENT,
-        data={"type": "help", "help": HELP_DATA},
-    )
 
 
 @router.post("/chat", response_model=AgentResponse)
@@ -36,89 +22,55 @@ def _get_help_response() -> AgentResponse:
 async def chat(
     request: Request, req: ChatRequest, user_id: CurrentUser
 ) -> AgentResponse:
-    """
-    Send a message to the AI agent (non-streaming).
-
-    Returns complete response after processing
-    Use /help to see available commands
-    """
-    # Handle help command
-    if _is_help_command(req.message):
-        return _get_help_response()
-
+    """Send a message to the AI agent (non-streaming)."""
     if req.conversation_id is not None:
         conversation = await queries.get_conversation(req.conversation_id, user_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-    return await run_agent(req.message, user_id, req.conversation_id, req.awaiting, req.context)
+    return await run_agent(
+        req.message, user_id, req.conversation_id, req.awaiting, req.context
+    )
 
 
 @router.post("/chat/stream")
 @limiter.limit("30/minute")
 async def chat_stream(request: Request, req: ChatRequest, user_id: CurrentUser):
+    """Send a message to the AI agent with streaming response (SSE).
+
+    The graph runs synchronously before the SSE response starts so that
+    `awaiting` state can be delivered as HTTP response headers — available
+    to the client the moment `await fetch()` resolves, before any body bytes.
+    The SSE body carries only text tokens.
     """
-    Send a message to the AI agent with streaming response (SSE).
-
-    Returns Server-Sent Events with text chunks as they're generated.
-
-    Example usage with Javascript:
-    ```javascript
-    const eventSource = new EventSource('/api/v1/chat/stream', {
-        method: 'POST',
-        body: JSON.stringify({ message: "I walked 9880 steps" })
-    })
-
-    eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log(data.text); // Append to UI
-    };
-    ```
-    or with fetch:
-    ```javascript
-    const response = await fetch('/api/v1/chat/stream', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer <token>'
-        },
-        body: JSON.stringify({ message: 'I walked 5000 steps' })
-    });
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        console.log(decoder.decode(value));
-    }
-    ```
-    """
-    # Handle help command - return immediately without streaming
-    # Help is NOT saved to conversation - it's static content
-    if _is_help_command(req.message):
-
-        async def help_generator():
-            yield {"event": "message", "data": HELP_CONTENT}
-            yield {"event": "done", "data": "[DONE]"}
-
-        return EventSourceResponse(help_generator())
+    from app.agent.graph_agent import _run_graph_and_get_state, stream_formatter_tokens
 
     if req.conversation_id is not None:
         conversation = await queries.get_conversation(req.conversation_id, user_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-    async def event_generator():
-        """Generate SSE events from agent stream."""
-        try:
-            async for chunk in run_agent_stream(
-                req.message, user_id, req.conversation_id, req.awaiting, req.context
-            ):
-                yield {"event": "message", "data": chunk}
-            yield {"event": "done", "data": "[DONE]"}
-        except Exception as e:
-            yield {"event": "error", "data": str(e)}
+    start = perf_counter()
+    state, response = await _run_graph_and_get_state(
+        req.message, user_id, req.conversation_id, req.awaiting, req.context
+    )
 
-    return EventSourceResponse(event_generator())
+    headers: dict[str, str] = {}
+    if response.data and response.data.get("awaiting"):
+        headers["x-tally-awaiting"] = str(response.data["awaiting"])
+        headers["x-tally-context"] = json.dumps(response.data)
+
+    async def event_generator():
+        async for chunk in stream_formatter_tokens(
+            state, response, req.conversation_id, user_id, req.message, start
+        ):
+            yield {"event": "message", "data": chunk}
+        yield {"event": "done", "data": "[DONE]"}
+
+    # ping=0: no keep-alive pings so connection closes cleanly after [DONE].
+    # sep="\n": use LF line endings — sse_starlette defaults to CRLF (\r\n)
+    # which breaks the client-side "\n\n" event-boundary parser.
+    sse = EventSourceResponse(event_generator(), ping=0, sep="\n")
+    for k, v in headers.items():
+        sse.headers[k] = v
+    return sse

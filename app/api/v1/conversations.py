@@ -2,16 +2,15 @@
 
 from fastapi import APIRouter, HTTPException
 
+from app.api.deps import CurrentUser
 from app.db import queries
 from app.models.schemas import (
-    ConversationResponse,
     ConversationCreate,
+    ConversationResponse,
     ConversationUpdate,
     ConversationWithMessages,
     MessageResponse,
 )
-from app.api.deps import CurrentUser
-
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 

@@ -22,3 +22,6 @@ logs/
 
 # Files
 benchmark.py
+
+# Private docs (README.md and LICENSE are tracked; docs/ stays local)
+docs/

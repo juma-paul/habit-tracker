@@ -2,9 +2,9 @@ services:
   db:
     image: postgres:17
     environment:
-      POSTGRES_USER: habit-tracker-user
-      POSTGRES_PASSWORD: habit-tracker-pass
-      POSTGRES_DB: habit-tracker-db
+      POSTGRES_USER: tally-user
+      POSTGRES_PASSWORD: tally-pass
+      POSTGRES_DB: tally-db
 
     ports:
       - "5434:5432"
@@ -14,11 +14,21 @@ services:
       - ./app/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U habit-tracker-user"]
-      interval: 1m30s
-      timeout: 30s
+      test: ["CMD-SHELL", "pg_isready -U tally-user -d tally-db"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 30s
+
+  app:
+    build: .
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

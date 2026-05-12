@@ -6,14 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
+from app.api.v1 import router as v1_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
-from app.db.connection import init_pool, close_pool
-from app.api.v1 import router as v1_router
-
+from app.db.connection import close_pool, init_pool
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -26,7 +25,7 @@ async def lifespan(app: FastAPI):
     await init_pool()
     logger.info("Database pool initialized")
     yield
-    logger.info("🛑 Shutting down Habit Tracking API")
+    logger.info("Shutting down Habit Tracking API")
     await close_pool()
     logger.info("Database pool closed")
 
@@ -46,7 +45,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=get_settings().allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

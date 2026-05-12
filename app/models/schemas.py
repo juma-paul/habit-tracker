@@ -1,34 +1,29 @@
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-# ===============================
-# ENUMS
-# ===============================
-
-
-class Frequency(str, Enum):
+class Frequency(StrEnum):
     daily = "daily"
     weekly = "weekly"
     monthly = "monthly"
 
 
-class Theme(str, Enum):
+class Theme(StrEnum):
     light = "light"
     dark = "dark"
     system = "system"
 
 
-class MessageRole(str, Enum):
+class MessageRole(StrEnum):
     user = "user"
     assistant = "assistant"
     system = "system"
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     success = "success"
     error = "error"
     clarification = "clarification"
@@ -43,6 +38,10 @@ class UserResponse(BaseModel):
     id: int
     email: str
     name: str | None = None
+
+
+class UserNameUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
 
 
 # ===============================

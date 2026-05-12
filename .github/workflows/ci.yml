@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: tally-user
+          POSTGRES_PASSWORD: tally-pass
+          POSTGRES_DB: tally-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Database — CI uses port 5432 (no local conflict to avoid, unlike dev's 5434)
+      DATABASE_URL: postgresql://tally-user:tally-pass@localhost:5432/tally-test
+
+      # AI provider — tests mock all LLM calls; keys only need to pass config validation
+      AI_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: ci_placeholder
+      ANTHROPIC_MODEL: claude-haiku-4-5-20251001
+
+      # STT/TTS — also mocked in tests
+      STT_PROVIDER: groq
+      GROQ_API_KEY: ci_placeholder
+      ELEVENLABS_API_KEY: ci_placeholder
+      ELEVENLABS_VOICE_ID: ci_placeholder
+
+      # Auth
+      JWT_SECRET: ci_test_jwt_secret_at_least_32_chars_long
+      JWT_ALGORITHM: HS256
+
+      # App
+      ENVIRONMENT: test
+      RATE_LIMIT_PER_MINUTE: 60
+      ALLOWED_ORIGINS: '["http://localhost:3000"]'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python 3.13
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check app/ tests/
+
+      - name: Type check (mypy)
+        run: uv run mypy app/
+
+      - name: Run schema migrations
+        run: psql $DATABASE_URL -f app/db/schema.sql
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev
+
+      - name: Build and push Docker image
+        run: |
+          docker buildx build --platform linux/amd64 \
+            -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/tally/tally:${{ github.ref_name }} \
+            -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/tally/tally:latest \
+            --push \
+            .
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy tally \
+            --image ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/tally/tally:${{ github.ref_name }} \
+            --region ${{ secrets.GCP_REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8001 \
+            --min-instances 0 \
+            --max-instances 2 \
+            --memory 512Mi \
+            --cpu 1 \
+            --timeout 3600 \
+            --set-env-vars "ENVIRONMENT=production"
