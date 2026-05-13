@@ -556,6 +556,7 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
 
             case "duplicate_confirm":
                 state.awaiting = None
+                confirmed = await _confirmed(state.message)
                 msg_lower = state.message.strip().lower()
                 if confirmed or any(
                     w in msg_lower for w in ("add", "another", "new", "both", "second")
@@ -574,6 +575,7 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
 
             case "fix_log_confirm":
                 state.awaiting = None
+                confirmed = await _confirmed(state.message)
                 if confirmed:
                     return UpdateLogNode()
                 state.response = "OK, I'll leave your log as is."
@@ -637,6 +639,7 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
 
             case "delete_log_confirm":
                 state.awaiting = None
+                confirmed = await _confirmed(state.message)
                 if confirmed:
                     return DeleteLogNode()
                 state.response = "Got it — log entry kept."
