@@ -381,11 +381,11 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
         | End[AgentResponse]
     ):
         state = ctx.state
-        confirmed = await _confirmed(state.message)
 
         match state.awaiting:
             case "create_confirm":
                 state.awaiting = None
+                confirmed = await _confirmed(state.message)
                 # Always re-classify — user may include target/unit/frequency in their
                 # confirmation ("yes, with a goal of 12 glasses daily") or send a
                 # completely different request ("show my habits") that should be honoured.
@@ -529,6 +529,7 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
 
             case "delete_confirm":
                 state.awaiting = None
+                confirmed = await _confirmed(state.message)
                 if confirmed:
                     return DeleteHabitNode()
                 state.response = f"Got it — '{state.habit_name}' is safe."

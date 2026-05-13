@@ -119,6 +119,7 @@ async def test_target_captured_from_confirmation(test_user):
         ),
         patch("app.agent.graph_agent.queries.create_habit", mock_create),
         patch("app.agent.graph_agent.queries.add_message", new_callable=AsyncMock),
+        patch("app.agent.graph_agent._get_formatter", _mock_formatter()),
     ):
         response = await run_graph_agent(
             message="yes with 12 glasses daily",
