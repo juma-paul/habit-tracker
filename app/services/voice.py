@@ -211,7 +211,7 @@ def _table_lines_to_speech(lines: list[str]) -> str:
     parts: list[str] = []
     for i, row in enumerate(data_rows, 1):
         fields = []
-        for header, value in zip(headers, row):
+        for header, value in zip(headers, row, strict=False):
             spoken = _normalize_cell(value)
             fields.append(f"{header}: {spoken}")
         parts.append(f"{i}. {'. '.join(fields)}.")

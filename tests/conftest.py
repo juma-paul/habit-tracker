@@ -6,10 +6,9 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.core.config import get_settings
-from app.db.connection import init_pool, close_pool
-
+from app.db.connection import close_pool, init_pool
+from app.main import app
 
 # Module-level reference so run() uses the same loop the pool was opened on
 _session_loop: asyncio.AbstractEventLoop | None = None

@@ -1,7 +1,8 @@
 """Tests for streaming chat and WebSocket voice."""
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 from starlette.websockets import WebSocketDisconnect
 
 
@@ -15,8 +16,8 @@ def make_mock_stream(*chunks):
 
 def test_chat_stream_authenticated(auth_client):
     """POST /chat/stream with valid cookie returns SSE stream."""
-    from app.models.schemas import AgentResponse, AgentStatus
     from app.agent.graph_agent import HabitGraphState
+    from app.models.schemas import AgentResponse, AgentStatus
 
     mock_state = HabitGraphState(message="Hello", user_id=1)
     mock_response = AgentResponse(status=AgentStatus.success, message="Hi!")
@@ -50,17 +51,15 @@ def test_chat_stream_unauthenticated(client):
 
 def test_websocket_no_cookie(client):
     """WebSocket connection without accessToken cookie is rejected."""
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/api/v1/ws/voice"):
-            pass
+    with pytest.raises(WebSocketDisconnect), client.websocket_connect("/api/v1/ws/voice"):
+        pass
 
 
 def test_websocket_invalid_cookie(client):
     """WebSocket connection with a tampered cookie is rejected."""
     client.cookies.set("accessToken", "bad.token.here")
-    with pytest.raises((WebSocketDisconnect, Exception)):
-        with client.websocket_connect("/api/v1/ws/voice"):
-            pass
+    with pytest.raises((WebSocketDisconnect, Exception)), client.websocket_connect("/api/v1/ws/voice"):
+        pass
 
 
 def test_websocket_ping_pong(auth_client):

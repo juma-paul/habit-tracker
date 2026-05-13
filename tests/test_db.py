@@ -1,5 +1,6 @@
 """Database query tests."""
 import uuid
+
 import pytest
 
 from app.db import queries

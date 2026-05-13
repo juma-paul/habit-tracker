@@ -488,7 +488,6 @@ class HandleConfirmation(BaseNode[HabitGraphState]):
 
                 if index is None:
                     # Couldn't parse — re-prompt
-                    numbered = "\n".join(f"  {i + 1}." for i in range(len(ids)))
                     state.response = (
                         f"Please reply with a number (1–{len(ids)})."
                     )

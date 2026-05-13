@@ -7,7 +7,6 @@ import pytest
 from app.agent.graph_agent import run_graph_agent
 from app.models.schemas import AgentStatus
 
-
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 

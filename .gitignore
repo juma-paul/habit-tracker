@@ -25,3 +25,6 @@ benchmark.py
 
 # Private docs (README.md and LICENSE are tracked; docs/ stays local)
 docs/
+
+# Production env vars — fill in locally, never commit
+cloud-run.env.yaml
