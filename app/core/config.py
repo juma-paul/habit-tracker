@@ -9,6 +9,7 @@ class Environment(StrEnum):
     development = "development"
     production = "production"
     staging = "staging"
+    test = "test"
 
 
 class Settings(BaseSettings):
